@@ -1,3 +1,8 @@
+"""
+Collect local X, Y, and Z coordinates from MCAST and convert to
+a csv table of itrf values per antenna.
+"""
+
 import pandas as pd
 import numpy as np
 from cosmic.redis_actions import redis_obj, redis_hget_keyvalues
