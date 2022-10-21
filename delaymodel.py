@@ -5,10 +5,10 @@ import logging
 import time
 import threading
 import evla_mcast
-from delay_engine.phasing import compute_uvw, compute_antenna_gainphase
+from delay_engine.phasing import compute_uvw
 import astropy.constants as const
-from astropy.coordinates import ITRS, SkyCoord, AltAz, EarthLocation
-from astropy.time import Time,TimeDelta
+from astropy.coordinates import ITRS, SkyCoord
+from astropy.time import Time
 from cosmic.redis_actions import redis_obj, redis_hget_keyvalues, redis_publish_dict_to_hash
 
 #LOGGING
@@ -21,18 +21,15 @@ logging.basicConfig(
 logging.getLogger("delaymodel").setLevel(logging.DEBUG)
 
 #CONSTANTS
-FIX_DELAY = 0.0
 WD = os.path.realpath(os.path.dirname(__file__))
 DEFAULT_ANT_ITRF = os.path.join(WD, "vla_antenna_itrf.csv")
-MAX_SAMP_DELAY = 16384
 CLOCK_FREQ = 2.048e9 #Gsps
-ADC_SAMP_TIME = 1/CLOCK_FREQ
-MAX_DELAY = MAX_SAMP_DELAY * ADC_SAMP_TIME #seconds
-ADVANCE_TIME = MAX_DELAY/2
-REFANT = "ea01"
-NOADVANCE = True
+
+ADVANCE_TIME = (8e3/const.c.value) #largest baseline 8km / c ~ largest calibration delay in s
+NOADVANCE = False
 TIME_INTERPOLATION_LENGTH=1 
-LO = 1.0
+
+ITRF_CENTER = [-1601185.4, -5041977.5, 3554875.9] # x,y,z
 
 class DelayModel(evla_mcast.Controller):
     def __init__(self, redis_obj):
@@ -45,7 +42,6 @@ class DelayModel(evla_mcast.Controller):
         threading.Thread.__init__(self)
         self.redis_obj = redis_obj
         self.itrf = pd.read_csv(DEFAULT_ANT_ITRF, names=['X', 'Y', 'Z'], header=None, skiprows=1)
-        self.irefant = self.itrf.index.values.tolist().index(REFANT)
         self.antname_inorder = list(self.itrf.index.values)
         self.num_ants = len(self.antname_inorder)
         self.data = {
@@ -88,23 +84,23 @@ class DelayModel(evla_mcast.Controller):
             t = np.floor(time.time())
             tts = [3, (TIME_INTERPOLATION_LENGTH/2) + 3, TIME_INTERPOLATION_LENGTH + 3] # Interpolate time samples with 3s advance
             tts = np.array(tts) + t
-
+            dt = TIME_INTERPOLATION_LENGTH/2
             ts = Time(tts, format='unix')
 
             # perform coordinate transformation to uvw
-            uvw1 = compute_uvw(ts[0], self.source, self.itrf[['X','Y','Z']], self.itrf[['X','Y','Z']].values[self.irefant])
-            uvw2 = compute_uvw(ts[1], self.source, self.itrf[['X','Y','Z']], self.itrf[['X','Y','Z']].values[self.irefant])
-            uvw3 = compute_uvw(ts[2], self.source, self.itrf[['X','Y','Z']], self.itrf[['X','Y','Z']].values[self.irefant])
+            uvw1 = compute_uvw(ts[0], self.source, self.itrf[['X','Y','Z']], ITRF_CENTER)
+            uvw2 = compute_uvw(ts[1], self.source, self.itrf[['X','Y','Z']], ITRF_CENTER)
+            uvw3 = compute_uvw(ts[2], self.source, self.itrf[['X','Y','Z']], ITRF_CENTER)
 
             # "w" coordinate represents the goemetric delay in light-meters
             w1 = uvw1[...,2]
             w2 = uvw2[...,2]
             w3 = uvw3[...,2]
 
-            # Add fixed delays + convert to seconds
-            delay1 = FIX_DELAY + (w1/const.c.value)
-            delay2 = FIX_DELAY + (w2/const.c.value)
-            delay3 = FIX_DELAY + (w3/const.c.value)
+            # Calibration delays are added in the controller
+            delay1 = (w1/const.c.value)
+            delay2 = (w2/const.c.value)
+            delay3 = (w3/const.c.value)
 
             delay1 = -delay1
             delay2 = -delay2
@@ -117,11 +113,11 @@ class DelayModel(evla_mcast.Controller):
                 delay3 += ADVANCE_TIME
 
             # Compute the delay rate in s/s
-            rate1 = (delay2 - delay1) / (tts[1] - tts[0])
-            rate2 = (delay3 - delay2) / (tts[2] - tts[1])
+            rate1 = (delay2 - delay1) / (dt)
+            rate2 = (delay3 - delay2) / (dt)
 
             # Compute the delay rate rate in s/s^2
-            raterate = (rate2 - rate1) / (tts[2] - tts[1])
+            raterate = (rate2 - rate1) / (dt)
 
             self.data["delay_ns"] = (delay1*1e9).tolist()
             self.data["delay_rate_nsps"] = (rate1*1e9).tolist()
@@ -129,12 +125,12 @@ class DelayModel(evla_mcast.Controller):
             self.data["time_value"] = t
             logging.debug(f"Calculated the following delay data dictionary: {self.data}")
             self.publish_delays()
-            time.sleep(2)
+            time.sleep(30)
     
     def publish_delays(self):
         df = pd.DataFrame(self.data, index=self.antname_inorder)
         delay_dict = df.to_dict('index')
-        print(f"Publishing dictionary {delay_dict}...")
+        # logging.debug(f"Publishing dictionary {delay_dict}...")
         redis_publish_dict_to_hash(self.redis_obj, "META_modelDelays", delay_dict)
 
     def stop(self):
