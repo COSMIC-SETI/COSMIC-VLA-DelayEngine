@@ -3,13 +3,14 @@ import pandas as pd
 import os
 import logging
 import time
+import ast
 import threading
-import evla_mcast
+import redis
 from delay_engine.phasing import compute_uvw
 import astropy.constants as const
 from astropy.coordinates import SkyCoord
 from astropy.time import Time
-from cosmic.redis_actions import redis_obj, redis_hget_keyvalues, redis_publish_service_pulse, redis_publish_dict_to_hash
+from cosmic.redis_actions import redis_obj, redis_publish_service_pulse, redis_publish_dict_to_hash
 
 #LOGGING
 logging.basicConfig(
@@ -33,7 +34,7 @@ TIME_INTERPOLATION_LENGTH=1
 
 ITRF_CENTER = [-1601185.4, -5041977.5, 3554875.9] # x,y,z
 
-class DelayModel(evla_mcast.Controller):
+class DelayModel(threading.Thread):
     def __init__(self, redis_obj):
         """
         A delay calculation object.
@@ -41,10 +42,7 @@ class DelayModel(evla_mcast.Controller):
         to calculate the geometric delays for each antenna and publish them
         to redis.
         """
-        #Initialise the mcast controller
-        evla_mcast.Controller.__init__(self, delays=False, obs_group='239.192.3.12')
-        self.scans_require = ["obs", "stop"]  # 'vci', 'ant'
-
+        threading.Thread.__init__(self)
         self.redis_obj = redis_obj
         self.itrf = pd.read_csv(DEFAULT_ANT_ITRF, names=['X', 'Y', 'Z'], header=None, skiprows=1)
         self.antname_inorder = list(self.itrf.index.values)
@@ -55,33 +53,41 @@ class DelayModel(evla_mcast.Controller):
                     "delay_raterate_nsps2":[0.0]*self.num_ants,
                     "time_value":0.0
                     }
-        self.init_source_from_redis()
-        self.publish_delays()
+        #initialise the source coordinates
+        self.source = SkyCoord(0.0, 0.0, unit='deg')
+        
+        #thread for calculating delays
         self.calculate_delay_thread = threading.Thread(
             target=self.calculate_delay, args=(), daemon=False
         )
+        #thread for listening to ra/dec updates
+        self.listen_for_source = threading.Thread(
+            target=self.ra_dec_listener, args=(), daemon=False
+        )
         logging.info("Starting delay calculation thread...")
         self.calculate_delay_thread.start()
+        logging.info("Starting source coord listener...")
+        self.listen_for_source.start()
 
-    def init_source_from_redis(self):
-        logging.info(f"Initialize source coordinates...")
-        obs_meta = redis_hget_keyvalues(
-            self.redis_obj, "META"
-        )
-        self.ra = obs_meta.get('ra_deg', None)
-        self.dec = obs_meta.get('dec_deg', None)
-        self.source = SkyCoord(self.ra, self.dec, unit='deg')
-
-    def handle_config(self, scan):
-        self.scan = scan
-         # This function get the scans with a complete metadata from evla_mcast
-        logging.info("Handling updated ra and dec values from observation metadata")
-
-        # Parse phase center coordinates
-        self.ra = scan.ra_deg
-        self.dec = scan.dec_deg
-        self.source = SkyCoord(self.ra, self.dec, unit='deg')
-        return True
+    def ra_dec_listener(self):
+        # This function listens for updates on the "source_ra_dec" redis channels
+        pubsub = self.redis_obj.pubsub(ignore_subscribe_messages=True)
+        for channel in [
+            "source_ra_dec"
+        ]:
+            try:
+                pubsub.subscribe(channel) 
+            except redis.RedisError:
+                logging.error(f'Subscription to `{channel}` unsuccessful.')
+        
+        for message in pubsub.listen():
+            if message is not None and isinstance(message, dict):
+                coords = ast.literal_eval(message.get('data'))
+                # Parse phase center coordinates
+                ra = coords["ra"]
+                dec = coords["dec"]
+                self.source = SkyCoord(ra, dec, unit='deg')
+                logging.info(f"Received new ra value: {ra} and dec value {dec}")
     
     def calculate_delay(self):
         while True:
@@ -130,13 +136,15 @@ class DelayModel(evla_mcast.Controller):
             self.data["time_value"] = t
             logging.debug(f"Calculated the following delay data dictionary: {self.data}")
             self.publish_delays()
-            time.sleep(1)
+            time.sleep(0.5)
     
     def publish_delays(self):
         df = pd.DataFrame(self.data, index=self.antname_inorder)
         delay_dict = df.to_dict('index')
         logging.debug(f"Publishing delays dictionary: {delay_dict}")
         redis_publish_dict_to_hash(self.redis_obj, "META_modelDelays", delay_dict)
+        for ant, delays in delay_dict.items():
+            self.redis_obj.publish(f"{ant}_delays",str(delays))
 
 if __name__ == "__main__":
     delayModel = DelayModel(redis_obj)
