@@ -132,7 +132,7 @@ class DelayModel(evla_mcast.Controller):
     def publish_delays(self):
         df = pd.DataFrame(self.data, index=self.antname_inorder)
         delay_dict = df.to_dict('index')
-        logging.info(f"Publishing delays dictionary")
+        logging.debug(f"Publishing delays dictionary: {delay_dict}")
         redis_publish_dict_to_hash(self.redis_obj, "META_modelDelays", delay_dict)
 
 if __name__ == "__main__":
