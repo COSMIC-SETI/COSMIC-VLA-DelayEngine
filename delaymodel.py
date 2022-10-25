@@ -9,7 +9,7 @@ from delay_engine.phasing import compute_uvw
 import astropy.constants as const
 from astropy.coordinates import SkyCoord
 from astropy.time import Time
-from cosmic.redis_actions import redis_obj, redis_hget_keyvalues, redis_publish_dict_to_hash
+from cosmic.redis_actions import redis_obj, redis_hget_keyvalues, redis_publish_service_pulse, redis_publish_dict_to_hash
 
 #LOGGING
 logging.basicConfig(
@@ -17,6 +17,8 @@ logging.basicConfig(
     format="[%(asctime)s - %(levelname)s - %(filename)s:%(lineno)s] %(message)s",
     level=logging.INFO,
 )
+
+SERVICE_NAME = os.path.splitext(os.path.basename(__file__))[0]
 
 logging.getLogger("delaymodel").setLevel(logging.INFO)
 
@@ -83,6 +85,7 @@ class DelayModel(evla_mcast.Controller):
     
     def calculate_delay(self):
         while True:
+            redis_publish_service_pulse(self.redis_obj, SERVICE_NAME)
             t = np.floor(time.time())
             tts = [3, (TIME_INTERPOLATION_LENGTH/2) + 3, TIME_INTERPOLATION_LENGTH + 3] # Interpolate time samples with 3s advance
             tts = np.array(tts) + t
