@@ -7,7 +7,7 @@ import threading
 import evla_mcast
 from delay_engine.phasing import compute_uvw
 import astropy.constants as const
-from astropy.coordinates import ITRS, SkyCoord
+from astropy.coordinates import SkyCoord
 from astropy.time import Time
 from cosmic.redis_actions import redis_obj, redis_hget_keyvalues, redis_publish_dict_to_hash
 
@@ -18,7 +18,7 @@ logging.basicConfig(
     level=logging.INFO,
 )
 
-logging.getLogger("delaymodel").setLevel(logging.DEBUG)
+logging.getLogger("delaymodel").setLevel(logging.INFO)
 
 #CONSTANTS
 WD = os.path.realpath(os.path.dirname(__file__))
@@ -39,7 +39,10 @@ class DelayModel(evla_mcast.Controller):
         to calculate the geometric delays for each antenna and publish them
         to redis.
         """
-        threading.Thread.__init__(self)
+        #Initialise the mcast controller
+        evla_mcast.Controller.__init__(self, delays=False, obs_group='239.192.3.12')
+        self.scans_require = ["obs", "stop"]  # 'vci', 'ant'
+
         self.redis_obj = redis_obj
         self.itrf = pd.read_csv(DEFAULT_ANT_ITRF, names=['X', 'Y', 'Z'], header=None, skiprows=1)
         self.antname_inorder = list(self.itrf.index.values)
@@ -76,7 +79,6 @@ class DelayModel(evla_mcast.Controller):
         self.ra = scan.ra_deg
         self.dec = scan.dec_deg
         self.source = SkyCoord(self.ra, self.dec, unit='deg')
-
         return True
     
     def calculate_delay(self):
@@ -125,19 +127,14 @@ class DelayModel(evla_mcast.Controller):
             self.data["time_value"] = t
             logging.debug(f"Calculated the following delay data dictionary: {self.data}")
             self.publish_delays()
-            time.sleep(30)
+            time.sleep(1)
     
     def publish_delays(self):
         df = pd.DataFrame(self.data, index=self.antname_inorder)
         delay_dict = df.to_dict('index')
-        # logging.debug(f"Publishing dictionary {delay_dict}...")
+        logging.info(f"Publishing delays dictionary")
         redis_publish_dict_to_hash(self.redis_obj, "META_modelDelays", delay_dict)
-
-    def stop(self):
-        if self.calculate_delay_thread.is_alive():
-            self.calculate_delay_thread.join()
 
 if __name__ == "__main__":
     delayModel = DelayModel(redis_obj)
     delayModel.run()
-    delayModel.stop() 
