@@ -3,14 +3,14 @@ import pandas as pd
 import os
 import logging
 import time
-import ast
+import json
 import threading
 import redis
 from delay_engine.phasing import compute_uvw
 import astropy.constants as const
 from astropy.coordinates import SkyCoord
 from astropy.time import Time
-from cosmic.redis_actions import redis_obj, redis_publish_service_pulse, redis_publish_dict_to_hash
+from cosmic.redis_actions import redis_obj, redis_hget_keyvalues, redis_publish_service_pulse, redis_publish_dict_to_hash
 
 #LOGGING
 logging.basicConfig(
@@ -24,70 +24,116 @@ SERVICE_NAME = os.path.splitext(os.path.basename(__file__))[0]
 logging.getLogger("delaymodel").setLevel(logging.INFO)
 
 #CONSTANTS
-WD = os.path.realpath(os.path.dirname(__file__))
-DEFAULT_ANT_ITRF = os.path.join(WD, "vla_antenna_itrf.csv")
-CLOCK_FREQ = 2.048e9 #Gsps
-
 ADVANCE_TIME = (8e3/const.c.value) #largest baseline 8km / c ~ largest calibration delay in s
 NOADVANCE = False
 TIME_INTERPOLATION_LENGTH=1 
-
-ITRF_CENTER = [-1601185.4, -5041977.5, 3554875.9] # x,y,z
+ITRF_X_OFFSET = -1601185.4
+ITRF_Y_OFFSET = -5041977.5
+ITRF_Z_OFFSET = 3554875.9
+ITRF_CENTER = [ITRF_X_OFFSET, ITRF_Y_OFFSET, ITRF_Z_OFFSET]
 
 class DelayModel(threading.Thread):
     def __init__(self, redis_obj):
         """
         A delay calculation object.
         Makes use of observation metadata and the vla antenna positions
-        to calculate the geometric delays for each antenna and publish them
-        to redis.
+        to calculate the geometric delays for each antenna and send them 
+        to the fengine nodes via redis channels.
         """
         threading.Thread.__init__(self)
+
         self.redis_obj = redis_obj
-        self.itrf = pd.read_csv(DEFAULT_ANT_ITRF, names=['X', 'Y', 'Z'], header=None, skiprows=1)
-        self.antname_inorder = list(self.itrf.index.values)
-        self.num_ants = len(self.antname_inorder)
-        self.data = {
-                    "delay_ns":[0.0]*self.num_ants,
-                    "delay_rate_nsps":[0.0]*self.num_ants,
-                    "delay_raterate_nsps2":[0.0]*self.num_ants,
-                    "time_value":0.0
-                    }
+
+        #initialise the antenna positions
+        self._calc_itrf_from_antprop(redis_hget_keyvalues(
+            redis_obj, "META_antennaProperties"
+        ))
+
         #initialise the source coordinates
-        self.source = SkyCoord(0.0, 0.0, unit='deg')
+        self._calc_source_coords_from_radec(redis_hget_keyvalues(
+            self.redis_obj, "META"
+        ))
+
+        #set up delay_data dictionary
+        self.delay_data = {
+            "delay_ns":None,
+            "delay_rate_nsps":None,
+            "delay_raterate_nsps2":None,
+            "time_value":None
+            }
         
         #thread for calculating delays
         self.calculate_delay_thread = threading.Thread(
             target=self.calculate_delay, args=(), daemon=False
         )
+
         #thread for listening to ra/dec updates
         self.listen_for_source = threading.Thread(
-            target=self.ra_dec_listener, args=(), daemon=False
+            target=self.redis_chan_listener, args=(), daemon=False
         )
-        logging.info("Starting delay calculation thread...")
-        self.calculate_delay_thread.start()
+
         logging.info("Starting source coord listener...")
         self.listen_for_source.start()
+        logging.info("Starting delay calculation thread...")
+        self.calculate_delay_thread.start()
 
-    def ra_dec_listener(self):
-        # This function listens for updates on the "source_ra_dec" redis channels
+    def _calc_itrf_from_antprop(self,ant2propmap):
+        """
+        Accept an antennaproperty dictionary and return 
+        antenna to itrf mapping dictionary:
+        {antname: {'X': 00, 'Y': 00, 'Z': 00}}
+        """
+        listlen = len(ant2propmap)
+        X = [None]*listlen
+        Y = [None]*listlen
+        Z = [None]*listlen
+        ANTNAMES = [None]*listlen
+        index = 0
+        for antname, prop in ant2propmap.items():
+            #Select only antenna with positions
+            if ('X' in prop) and ('Y' in prop) and ('Z' in prop):
+                ANTNAMES[index] = antname
+                X[index] = prop['X'] + ITRF_X_OFFSET
+                Y[index] = prop['Y'] + ITRF_Y_OFFSET
+                Z[index] = prop['Z'] + ITRF_Z_OFFSET
+                index+=1
+        data = {"X":X, "Y":Y, "Z":Z}
+        df = pd.DataFrame(data, index=ANTNAMES)
+        self.itrf = df[df.index.notnull()]
+        logging.debug(f"Received new antenna position values. Publishing now...")
+        redis_publish_dict_to_hash(self.redis_obj, "META_antennaITRF",  self.itrf.to_dict('index'))
+    
+    def _calc_source_coords_from_radec(self, obs_meta):
+        """
+        Accept an meta obs dictionary and calculate source
+        coordinates from the ra/dec contained therein
+        """
+        self.ra = obs_meta.get('ra_deg')
+        self.dec = obs_meta.get('dec_deg')
+        self.source = SkyCoord(self.ra, self.dec, unit='deg')
+        logging.debug(f"Received new ra value: {self.ra} and dec value {self.dec}")
+
+    def redis_chan_listener(self):
+        """This function listens for updates on the  "meta_antennaproperties"
+        and "meta_obs" redis channels"""
         pubsub = self.redis_obj.pubsub(ignore_subscribe_messages=True)
         for channel in [
-            "source_ra_dec"
+            "meta_antennaproperties",
+            "meta_obs"
         ]:
             try:
                 pubsub.subscribe(channel) 
             except redis.RedisError:
                 logging.error(f'Subscription to `{channel}` unsuccessful.')
-        
         for message in pubsub.listen():
             if message is not None and isinstance(message, dict):
-                coords = ast.literal_eval(message.get('data'))
-                # Parse phase center coordinates
-                ra = coords["ra"]
-                dec = coords["dec"]
-                self.source = SkyCoord(ra, dec, unit='deg')
-                logging.info(f"Received new ra value: {ra} and dec value {dec}")
+                if message['channel'] == "meta_antennaproperties":
+                    #Then here we want to collect X,Y and Z coordinates
+                    ant2prop = json.loads(message.get('data'))
+                    self._calc_itrf_from_antprop(ant2prop)
+                if message['channel'] == "meta_obs":
+                    obsmeta = json.loads(message.get('data'))
+                    self._calc_source_coords_from_radec(obsmeta)    
     
     def calculate_delay(self):
         while True:
@@ -130,21 +176,23 @@ class DelayModel(threading.Thread):
             # Compute the delay rate rate in s/s^2
             raterate = (rate2 - rate1) / (dt)
 
-            self.data["delay_ns"] = (delay1*1e9).tolist()
-            self.data["delay_rate_nsps"] = (rate1*1e9).tolist()
-            self.data["delay_raterate_nsps2"] = (raterate*1e9).tolist()
-            self.data["time_value"] = t
-            logging.debug(f"Calculated the following delay data dictionary: {self.data}")
+            self.delay_data["delay_ns"] = (delay1*1e9).tolist()
+            self.delay_data["delay_rate_nsps"] = (rate1*1e9).tolist()
+            self.delay_data["delay_raterate_nsps2"] = (raterate*1e9).tolist()
+            self.delay_data["time_value"] = t
+            logging.debug(f"Calculated the following delay data dictionary: {self.delay_data}")
             self.publish_delays()
-            time.sleep(0.5)
+            time.sleep(5)
     
     def publish_delays(self):
-        df = pd.DataFrame(self.data, index=self.antname_inorder)
+        df = pd.DataFrame(self.delay_data, index=list(self.itrf.index.values))
         delay_dict = df.to_dict('index')
-        logging.debug(f"Publishing delays dictionary: {delay_dict}")
-        redis_publish_dict_to_hash(self.redis_obj, "META_modelDelays", delay_dict)
         for ant, delays in delay_dict.items():
             self.redis_obj.publish(f"{ant}_delays",str(delays))
+        delay_dict['ra'] = self.ra
+        delay_dict['dec'] = self.dec
+        logging.debug(f"Publishing delays dictionary: {delay_dict}")
+        redis_publish_dict_to_hash(self.redis_obj, "META_modelDelays", delay_dict)
 
 if __name__ == "__main__":
     delayModel = DelayModel(redis_obj)
