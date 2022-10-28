@@ -136,6 +136,14 @@ class DelayModel(threading.Thread):
                     self._calc_source_coords_from_radec(obsmeta)    
     
     def calculate_delay(self):
+        """
+        Started in a thread, this function will take the updated right ascension and
+        declination in conjunction with the antenna positions (in itrf measurements)
+        to calculate the geometric delays for each antenna.
+        From these delay values we can produce delay rate and delay rate rate values
+        so that the fengines may interpolate delays while waiting for new delay value
+        updates.
+        """
         while True:
             redis_publish_service_pulse(self.redis_obj, SERVICE_NAME)
             t = np.floor(time.time())
@@ -182,9 +190,13 @@ class DelayModel(threading.Thread):
             self.delay_data["time_value"] = t
             logging.debug(f"Calculated the following delay data dictionary: {self.delay_data}")
             self.publish_delays()
-            time.sleep(5)
+            time.sleep(2.5)
     
     def publish_delays(self):
+        """
+        Push out delay values on individual channels for each antenna. Then
+        push out the full dictionary to a hash for display purposes.
+        """
         df = pd.DataFrame(self.delay_data, index=list(self.itrf.index.values))
         delay_dict = df.to_dict('index')
         for ant, delays in delay_dict.items():
