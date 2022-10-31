@@ -3,14 +3,13 @@ import pandas as pd
 import os
 import logging
 import time
-import json
 import threading
 import redis
 from delay_engine.phasing import compute_uvw
 import astropy.constants as const
 from astropy.coordinates import SkyCoord
 from astropy.time import Time
-from cosmic.redis_actions import redis_obj, redis_hget_keyvalues, redis_publish_service_pulse, redis_publish_dict_to_hash
+from cosmic.redis_actions import redis_obj, redis_hget_keyvalues, redis_publish_service_pulse, redis_publish_dict_to_hash, redis_publish_dict_to_channel
 
 #LOGGING
 logging.basicConfig(
@@ -24,8 +23,6 @@ SERVICE_NAME = os.path.splitext(os.path.basename(__file__))[0]
 logging.getLogger("delaymodel").setLevel(logging.INFO)
 
 #CONSTANTS
-ADVANCE_TIME = (8e3/const.c.value) #largest baseline 8km / c ~ largest calibration delay in s
-NOADVANCE = False
 TIME_INTERPOLATION_LENGTH=1 
 ITRF_X_OFFSET = -1601185.4
 ITRF_Y_OFFSET = -5041977.5
@@ -171,12 +168,6 @@ class DelayModel(threading.Thread):
             delay2 = -delay2
             delay3 = -delay3
 
-            # advance all the delays forward in time
-            if not NOADVANCE:
-                delay1 += ADVANCE_TIME
-                delay2 += ADVANCE_TIME
-                delay3 += ADVANCE_TIME
-
             # Compute the delay rate in s/s
             rate1 = (delay2 - delay1) / (dt)
             rate2 = (delay3 - delay2) / (dt)
@@ -200,7 +191,7 @@ class DelayModel(threading.Thread):
         df = pd.DataFrame(self.delay_data, index=list(self.itrf.index.values))
         delay_dict = df.to_dict('index')
         for ant, delays in delay_dict.items():
-            self.redis_obj.publish(f"{ant}_delays",str(delays))
+            redis_publish_dict_to_channel(self.redis_obj, f"{ant}_delays", delays)
         delay_dict['ra'] = self.ra
         delay_dict['dec'] = self.dec
         logging.debug(f"Publishing delays dictionary: {delay_dict}")
