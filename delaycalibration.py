@@ -60,7 +60,7 @@ class DelayCalibration(threading.Thread):
                 self.ant2calibmap[ant] = tmp_calib_values
             redis_publish_service_pulse(self.redis_obj, SERVICE_NAME)
             self.publish_calibration_delays()
-            time.sleep(30)
+            time.sleep(10)
 
     def publish_calibration_delays(self):
         """

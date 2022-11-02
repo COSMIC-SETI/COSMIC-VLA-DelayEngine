@@ -4,6 +4,7 @@ import os
 import logging
 import time
 import threading
+import json
 import redis
 from delay_engine.phasing import compute_uvw
 import astropy.constants as const
@@ -181,7 +182,7 @@ class DelayModel(threading.Thread):
             self.delay_data["time_value"] = t
             logging.debug(f"Calculated the following delay data dictionary: {self.delay_data}")
             self.publish_delays()
-            time.sleep(2.5)
+            time.sleep(5)
     
     def publish_delays(self):
         """
