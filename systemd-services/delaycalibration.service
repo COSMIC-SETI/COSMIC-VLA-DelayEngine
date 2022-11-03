@@ -1,0 +1,14 @@
+[Unit]
+Description=Service running the calibration delay calculator
+After=redis_server.service
+Requires=redis_server.service
+StartLimitInterval=0
+
+[Install]
+WantedBy=multi-user.target
+
+[Service]
+Type=simple
+ExecStart=/home/cosmic/anaconda3/envs/cosmic_vla/bin/python /home/cosmic/dev/COSMIC-VLA-DelayEngine/delaycalibration.py
+Restart=on-failure
+RestartSec=1
