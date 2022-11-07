@@ -9,12 +9,12 @@ from cosmic.redis_actions import redis_obj, redis_publish_service_pulse, redis_p
 
 #LOGGING
 logging.basicConfig(
-    filename="/home/cosmic/logs/DelayModel.log",
+    filename="/home/cosmic/logs/DelayCalibration.log",
     format="[%(asctime)s - %(levelname)s - %(filename)s:%(lineno)s] %(message)s",
     level=logging.INFO,
 )
 
-logging.getLogger("delaymodel").setLevel(logging.INFO)
+logging.getLogger("delaycalibration").setLevel(logging.INFO)
 
 SERVICE_NAME = os.path.splitext(os.path.basename(__file__))[0]
 
