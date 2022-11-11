@@ -2,6 +2,8 @@ import numpy as np
 import pandas as pd
 import os
 import logging
+from logging.handlers import RotatingFileHandler
+import argparse
 import time
 import threading
 import json
@@ -12,16 +14,30 @@ from astropy.coordinates import SkyCoord
 from astropy.time import Time
 from cosmic.redis_actions import redis_obj, redis_hget_keyvalues, redis_publish_service_pulse, redis_publish_dict_to_hash, redis_publish_dict_to_channel
 
-#LOGGING
-logging.basicConfig(
-    filename="/home/cosmic/logs/DelayModel.log",
-    format="[%(asctime)s - %(levelname)s - %(filename)s:%(lineno)s] %(message)s",
-    level=logging.INFO,
-)
+LOGFILENAME = "/home/cosmic/logs/DelayModel.log"
 
 SERVICE_NAME = os.path.splitext(os.path.basename(__file__))[0]
 
-logging.getLogger("delaymodel").setLevel(logging.INFO)
+#LOGGER:
+logger = logging.getLogger('model_delays')
+logger.setLevel(logging.INFO)
+
+# create console handler and set level to debug
+ch = logging.StreamHandler()
+ch.setLevel(logging.INFO)
+fh = RotatingFileHandler(LOGFILENAME, mode = 'a', maxBytes = 512, backupCount = 0, encoding = None, delay = False)
+fh.setLevel(logging.INFO)
+
+# create formatter
+formatter = logging.Formatter("[%(asctime)s - %(levelname)s - %(filename)s:%(lineno)s] %(message)s")
+
+# add formatter to ch
+ch.setFormatter(formatter)
+fh.setFormatter(formatter)
+
+# add ch to logger
+logger.addHandler(ch)
+logger.addHandler(fh)
 
 #CONSTANTS
 TIME_INTERPOLATION_LENGTH=1 
@@ -31,23 +47,32 @@ ITRF_Z_OFFSET = 3554875.9
 ITRF_CENTER = [ITRF_X_OFFSET, ITRF_Y_OFFSET, ITRF_Z_OFFSET]
 
 class DelayModel(threading.Thread):
-    def __init__(self, redis_obj):
+    def __init__(self, redis_obj, polling_rate):
         """
         A delay calculation object.
         Makes use of observation metadata and the vla antenna positions
         to calculate the geometric delays for each antenna and send them 
         to the fengine nodes via redis channels.
+
+        :param redis_obj: The redis object to connect to for access to relavent redis hashes
+        :type redis_obj: class
+
+        :param polling_rate: The rate at which to broadcast new model delay values.
+        :type polling_rate: float
         """
         threading.Thread.__init__(self)
 
         self.redis_obj = redis_obj
+        self.polling_rate = polling_rate
 
         #initialise the antenna positions
+        logger.info("Collecting initial antenna positions...")
         self._calc_itrf_from_antprop(redis_hget_keyvalues(
             redis_obj, "META_antennaProperties"
         ))
 
         #initialise the source coordinates
+        logger.info("Collecting initial ra and dec positions...")
         self._calc_source_coords_from_radec(redis_hget_keyvalues(
             self.redis_obj, "META"
         ))
@@ -70,9 +95,9 @@ class DelayModel(threading.Thread):
             target=self.redis_chan_listener, args=(), daemon=False
         )
 
-        logging.info("Starting source coord listener...")
+        logger.info("Starting source coord listener...")
         self.listen_for_source.start()
-        logging.info("Starting delay calculation thread...")
+        logger.info("Starting delay calculation thread...")
         self.calculate_delay_thread.start()
 
     def _calc_itrf_from_antprop(self,ant2propmap):
@@ -98,7 +123,7 @@ class DelayModel(threading.Thread):
         data = {"X":X, "Y":Y, "Z":Z}
         df = pd.DataFrame(data, index=ANTNAMES)
         self.itrf = df[df.index.notnull()]
-        logging.debug(f"Received new antenna position values. Publishing now...")
+        logger.info("Received new antenna position values. Publishing now...")
         redis_publish_dict_to_hash(self.redis_obj, "META_antennaITRF",  self.itrf.to_dict('index'))
     
     def _calc_source_coords_from_radec(self, obs_meta):
@@ -109,7 +134,7 @@ class DelayModel(threading.Thread):
         self.ra = obs_meta.get('ra_deg')
         self.dec = obs_meta.get('dec_deg')
         self.source = SkyCoord(self.ra, self.dec, unit='deg')
-        logging.debug(f"Received new ra value: {self.ra} and dec value {self.dec}")
+        logger.info(f"Received new ra value: {self.ra} and dec value {self.dec}")
 
     def redis_chan_listener(self):
         """This function listens for updates on the  "meta_antennaproperties"
@@ -122,7 +147,7 @@ class DelayModel(threading.Thread):
             try:
                 pubsub.subscribe(channel) 
             except redis.RedisError:
-                logging.error(f'Subscription to `{channel}` unsuccessful.')
+                logger.error(f'Subscription to `{channel}` unsuccessful.')
         for message in pubsub.listen():
             if message is not None and isinstance(message, dict):
                 if message['channel'] == "meta_antennaproperties":
@@ -180,9 +205,9 @@ class DelayModel(threading.Thread):
             self.delay_data["delay_rate_nsps"] = (rate1*1e9).tolist()
             self.delay_data["delay_raterate_nsps2"] = (raterate*1e9).tolist()
             self.delay_data["time_value"] = t
-            logging.debug(f"Calculated the following delay data dictionary: {self.delay_data}")
+            logger.info(f"Calculated the following delay data dictionary: {self.delay_data}")
             self.publish_delays()
-            time.sleep(5)
+            time.sleep(self.polling_rate)
     
     def publish_delays(self):
         """
@@ -195,9 +220,25 @@ class DelayModel(threading.Thread):
             redis_publish_dict_to_channel(self.redis_obj, f"{ant}_delays", delays)
         delay_dict['ra'] = self.ra
         delay_dict['dec'] = self.dec
-        logging.debug(f"Publishing delays dictionary: {delay_dict}")
+        logger.info("Publishing dictionary to redis...")
         redis_publish_dict_to_hash(self.redis_obj, "META_modelDelays", delay_dict)
 
 if __name__ == "__main__":
-    delayModel = DelayModel(redis_obj)
-    delayModel.run()
+
+    parser = argparse.ArgumentParser(
+    description=("Set up the Model delay calculator.")
+    )
+    parser.add_argument(
+    "-p","--polling_rate", type=float, help="Rate at which delays are calculated.", default=3
+    )
+    parser.add_argument(
+    "-c", "--clean", action="store_true",help="Delete the existing log file and start afresh.",
+    )
+    args = parser.parse_args()
+    if os.path.exists(LOGFILENAME) and args.clean:
+        logger.info("Removing previous log file...")
+        os.remove(LOGFILENAME)
+        logger.info("Log file removed.")
+    else:
+        print("Nothing to clean, continuing...")
+    delayModel = DelayModel(redis_obj, args.polling_rate)

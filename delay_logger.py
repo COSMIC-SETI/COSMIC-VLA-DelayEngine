@@ -9,19 +9,6 @@ import os
 import argparse
 
 LOGFILENAME = "/home/cosmic/logs/Delays.log"
-ANTS = ['ea10',
-'ea11',
-'ea12',
-'ea13',
-'ea14',
-'ea21',
-'ea22',
-'ea23',
-'ea24',
-'ea25',
-'ea26',
-'ea27',
-'ea28',]
 
 SERVICE_NAME = os.path.splitext(os.path.basename(__file__))[0]
 
@@ -31,7 +18,7 @@ logger.setLevel(logging.INFO)
 # create console handler and set level to debug
 ch = logging.StreamHandler()
 ch.setLevel(logging.INFO)
-fh = RotatingFileHandler(LOGFILENAME, mode = 'a', maxBytes = 1024, backupCount = 1, encoding = None, delay = False)
+fh = RotatingFileHandler(LOGFILENAME, mode = 'a', maxBytes = 512, backupCount = 0, encoding = None, delay = False)
 fh.setLevel(logging.INFO)
 
 # create formatter
@@ -83,9 +70,12 @@ class DelayLogger:
 
                 # dT/dt = 2ax + b
                 model_delay_rate = delay_raterate * 2 * loadtime_diff_modeltime + delay_rate
-                logging.info(f"Calculated expected delay rate of {model_delay_rate} for antenna {ant}.")
+                logger.info(f"Model delays received for antenna {ant}: {modelDelays[ant]}")
+                logger.info(f"Calculated expected delay rate of {model_delay_rate} for antenna {ant}.")
                 ant2delayrate[ant] = model_delay_rate
-        time.sleep(onesec_future_integer - time.time())
+        sleep_time = onesec_future_integer - time.time()
+        sleep_time = -1 * sleep_time if sleep_time < 0 else sleep_time
+        time.sleep(sleep_time)
         return ant2delayrate
     
     def _fetch_feng_state(self, antname):
@@ -103,7 +93,7 @@ class DelayLogger:
             "on" : feng_obj.delay_switch.is_set(),
             "tracking" : feng_obj.delay_track.is_set()
         }
-        logging.info(f"Antenna {antname} has delay state {delay_state}.")
+        logger.info(f"Antenna {antname} has delay state {delay_state}.")
         return delay_state
 
     def _fetch_feng_values(self, antname):
@@ -134,21 +124,22 @@ class DelayLogger:
             ant2delayrate = self._fetch_model_values()
             
             for ant, delay_rate in ant2delayrate.items():
-                logging.info(f"Checking delay status of antenna {ant}")
+                logger.info(f"Checking delay status of antenna {ant}")
                 feng_state = self._fetch_feng_state(ant)
                 slope, phase = self._fetch_feng_values(ant)
+                logger.info(f"Received slope = {slope} and phase = {phase} for antenna {ant}.")
 
                 if feng_state["on"] and feng_state["tracking"]:
                     #thread is live and tracking, check against model
-                    logging.info("Delay thread is live and delays are tracking.")
-                    is_correct = math.isclose(slope, delay_rate, rel_tol=1e-10)
+                    logger.info("Delay thread is live and delays are tracking.")
+                    is_correct = math.isclose(slope, delay_rate, rel_tol=2**-18)
                     feng_state["correct"] = is_correct
                     if not is_correct:
                         logging.error(f"Firmware reports slope = {slope} which is not close to model value = {delay_rate}.")
                 else:
-                    logging.info("Delay thread is dead")
+                    logger.info("Delay thread is dead")
                     #calibration mode or delay thread is dead, check against 0
-                    is_correct = math.isclose(slope, 0.0, rel_tol=1e-10)
+                    is_correct = math.isclose(slope, 0.0, rel_tol=2**-18)
                     feng_state["correct"] = is_correct
                     if not is_correct:
                         logging.error(f"Firmware reports slope = {slope} which is not close to model value = {delay_rate}.")
