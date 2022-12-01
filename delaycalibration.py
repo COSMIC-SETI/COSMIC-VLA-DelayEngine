@@ -6,7 +6,7 @@ import os
 from cosmic.redis_actions import redis_obj, redis_publish_dict_to_hash
 
 #CONSTANTS
-ADVANCE_TIME = (8e3/const.c.value) #largest baseline 8km / c ~ largest calibration delay in s
+ADVANCE_TIME = (8e3/(0.66*const.c.value)) #largest baseline 8km / (2/3rds c) ~ largest calibration delay in s
 
 class DelayCalibration():
     def __init__(self, redis_obj, calib_csv):
