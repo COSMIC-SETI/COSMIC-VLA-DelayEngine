@@ -1,4 +1,5 @@
-from cosmic.redis_actions import redis_obj, redis_publish_service_pulse
+from cosmic.redis_actions import redis_obj, redis_publish_service_pulse, redis_hget_keyvalues, redis_publish_dict_to_hash
+from cosmic.fengines import ant_remotefeng_map
 import time
 import logging
 from logging.handlers import RotatingFileHandler
@@ -39,18 +40,30 @@ class DelayLogger:
     def __init__(self, redis_obj, polling_rate):
         self.redis_obj = redis_obj
         self.polling_rate = polling_rate
+        self.ant_feng_map = ant_remotefeng_map.get_antennaFengineDict(self.redis_obj)
         
         logger.info("Starting Delay logger...\n")
 
     def run(self):
         """
         Every polling rate, fetch from FENG_delayStatus the entire dict
-        and log it to file.
+        and ammend it to account for the state of the delay threads before publishing.
         """
+        new_delay_status_dict = {}
         while True:
             redis_publish_service_pulse(self.redis_obj, SERVICE_NAME)
-            str_to_log = self.redis_obj.hgetall("FENG_delayStatus")
-            logger.info(str_to_log)
+            delay_status_dict = redis_hget_keyvalues(self.redis_obj, "FENG_delayStatus")
+            for ant, feng in self.ant_feng_map.items():
+                if ant in delay_status_dict:
+                    delay_dict = delay_status_dict[ant]
+                    delay_dict["on"] = str(feng.delay_switch.is_set())
+                    delay_dict["tracking"] = "True" if feng.delay_track.is_set() else "fixed-only"
+                    new_delay_status_dict[ant] = delay_dict
+                else:
+                    new_delay_status_dict[ant] = f"No delay status available for {ant}..."
+
+            logger.info(f"Delay state: {new_delay_status_dict}")
+            redis_publish_dict_to_hash(self.redis_obj, "FENG_delayState", new_delay_status_dict)
 
             time.sleep(self.polling_rate)
 
