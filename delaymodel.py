@@ -47,7 +47,7 @@ ITRF_Z_OFFSET = 3554875.9
 ITRF_CENTER = [ITRF_X_OFFSET, ITRF_Y_OFFSET, ITRF_Z_OFFSET]
 
 class DelayModel(threading.Thread):
-    def __init__(self, redis_obj, polling_rate):
+    def __init__(self, redis_obj):
         """
         A delay calculation object.
         Makes use of observation metadata and the vla antenna positions
@@ -56,14 +56,10 @@ class DelayModel(threading.Thread):
 
         :param redis_obj: The redis object to connect to for access to relavent redis hashes
         :type redis_obj: class
-
-        :param polling_rate: The rate at which to broadcast new model delay values.
-        :type polling_rate: float
         """
         threading.Thread.__init__(self)
 
         self.redis_obj = redis_obj
-        self.polling_rate = polling_rate
 
         #initialise the antenna positions
         logger.info("Collecting initial antenna positions...")
@@ -201,13 +197,11 @@ class DelayModel(threading.Thread):
             # Compute the delay rate rate in s/s^2
             raterate = (rate2 - rate1) / (dt)
 
-            self.delay_data["delay_ns"] = (delay1*1e9).tolist()
+            self.delay_data["delay_ns"] = (-1.0*delay1*1e9).tolist()
             self.delay_data["delay_rate_nsps"] = (rate1*1e9).tolist()
             self.delay_data["delay_raterate_nsps2"] = (raterate*1e9).tolist()
             self.delay_data["time_value"] = t
-            logger.info(f"Calculated the following delay data dictionary: {self.delay_data}")
             self.publish_delays()
-            time.sleep(self.polling_rate)
     
     def publish_delays(self):
         """
@@ -218,18 +212,14 @@ class DelayModel(threading.Thread):
         delay_dict = df.to_dict('index')
         for ant, delays in delay_dict.items():
             redis_publish_dict_to_channel(self.redis_obj, f"{ant}_delays", delays)
-        delay_dict['ra'] = self.ra
-        delay_dict['dec'] = self.dec
-        logger.info("Publishing dictionary to redis...")
+        delay_dict['deg_ra'] = self.ra
+        delay_dict['deg_dec'] = self.dec
         redis_publish_dict_to_hash(self.redis_obj, "META_modelDelays", delay_dict)
 
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(
     description=("Set up the Model delay calculator.")
-    )
-    parser.add_argument(
-    "-p","--polling_rate", type=float, help="Rate at which delays are calculated.", default=3
     )
     parser.add_argument(
     "-c", "--clean", action="store_true",help="Delete the existing log file and start afresh.",
@@ -240,5 +230,5 @@ if __name__ == "__main__":
         os.remove(LOGFILENAME)
         logger.info("Log file removed.")
     else:
-        print("Nothing to clean, continuing...")
-    delayModel = DelayModel(redis_obj, args.polling_rate)
+        logger.info("Nothing to clean, continuing...")
+    delayModel = DelayModel(redis_obj)
