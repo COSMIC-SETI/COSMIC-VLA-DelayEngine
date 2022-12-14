@@ -1,4 +1,4 @@
-import pandas as pd
+import json
 import numpy as np
 import argparse
 from cosmic.redis_actions import redis_obj, redis_hget_keyvalues
@@ -19,64 +19,62 @@ def gen_delay_vectors(model_delays, calib_delays, time_range, use_calib=False):
     """
 
     ant_to_delay_dict = {}
+    ant_to_phase_dict = {}
     ant_to_delay_rate_dict = {}
+    ant_to_phase_rate_dict = {}
 
-    if use_calib:
-        for ant, calib_delay in calib_delays.items():
-            if ant in model_delays:
-                time = time_range - model_delays[ant]["time_value"]
-                t_arr = np.zeros((4,len(time_range)))
-                for i, c_delay in enumerate(calib_delay.values()): 
-                    t_arr[i, :] = (model_delays[ant]["delay_raterate_nsps2"] * (time**2) +
+    for ant, calib_delay in calib_delays.items():
+        if ant in model_delays:
+
+            time = time_range - model_delays[ant]["time_value"]
+
+            eff_lo_0 = model_delays[ant]["effective_lo_0_hz"] / 1e9 # gigahertz
+            eff_lo_1 = model_delays[ant]["effective_lo_1_hz"] / 1e9 # gigahertz
+
+            for i, c_delay in enumerate(calib_delay.values()):
+                if use_calib:
+                    ant_to_delay_dict[f"{ant}_{i}"] = (model_delays[ant]["delay_raterate_nsps2"] * (time**2) +
                                         (model_delays[ant]["delay_rate_nsps"] * time) +
                                         (model_delays[ant]["delay_ns"] + c_delay))
+                else:
+                    ant_to_delay_dict[f"{ant}_{i}"] = (model_delays[ant]["delay_raterate_nsps2"] * (time**2) +
+                                        (model_delays[ant]["delay_rate_nsps"] * time) +
+                                        (model_delays[ant]["delay_ns"]))
+                ant_to_delay_rate_dict[f"{ant}_{i}"] = ((model_delays[ant]["delay_raterate_nsps2"] * time) +
+                                            (model_delays[ant]["delay_rate_nsps"]))
+                if i < 2:
+                    ant_to_phase_dict[f"{ant}_{i}"] = (2*np.pi) * ant_to_delay_dict[f"{ant}_{i}"] * eff_lo_0 
+                    ant_to_phase_rate_dict[f"{ant}_{i}"] = (2*np.pi) * ant_to_delay_rate_dict[f"{ant}_{i}"] * eff_lo_0 
+                else:
+                    ant_to_phase_dict[f"{ant}_{i}"] = (2*np.pi) * ant_to_delay_dict[f"{ant}_{i}"] * eff_lo_1 
+                    ant_to_phase_rate_dict[f"{ant}_{i}"] = (2*np.pi) * ant_to_delay_rate_dict[f"{ant}_{i}"] * eff_lo_1 
 
-                ant_to_delay_dict[ant] = t_arr
-                ant_to_delay_rate_dict[ant] = ((model_delays[ant]["delay_raterate_nsps2"] * time) +
-                                                (model_delays[ant]["delay_rate_nsps"])) 
-    else:
-        for ant, delay in model_delays.items():
-            time = time_range - delay["time_value"]
-            ant_to_delay_dict[ant] = ((delay["delay_raterate_nsps2"] * (time**2)) +
-                                    (delay["delay_rate_nsps"] * time) +
-                                    (delay["delay_ns"]))
-            ant_to_delay_rate_dict[ant] = ((delay["delay_raterate_nsps2"] * time) +
-                                                (delay["delay_rate_nsps"])) 
+    return ant_to_delay_dict, ant_to_delay_rate_dict, ant_to_phase_dict, ant_to_phase_rate_dict
 
-    return ant_to_delay_dict, ant_to_delay_rate_dict
-
-def plot_delays_and_rates(ant_to_delay_dict, ant_to_delay_rate_dict, time_range, output_dir):
+def plotter(ant_to_valuematrix_dict, time_range, output_dir, suptitle, y_ax, x_ax):
     """
-    Over the time range provided, generate and save a plot the delays per IF and delay rates for every antenna.
+    Over the time range provided, generate and save a plot the values per IF for every antenna.
 
     Args:
-        ant_to_delay_dict        : Dictionary mapping antenna names to delays of dimension (nof_if, time)
-        ant_to_delay_rate_dict   : Dictionary mapping antenna names to delay rates vector
-        time_range               : A numpy vector of the time range the delays were calculated for.
+        ant_to_valuematrix_dict : Dictionary mapping antenna names to values of dimension (nof_if, time)
+        time_range              : A numpy vector of the time range the delays were calculated for.
+        output_dir              : Location to save the plot to - assumes it exists.
+        suptitle                : Title for the plot - used for the save file name.
+        y_ax                    : y-axis label.
+        x_ax                    : x-axis label.
     """
-    nof_ifs, _ = np.array([(ant_to_delay_dict[list(ant_to_delay_dict.keys())[0]])]).shape
-    for ant, delays in ant_to_delay_dict.items():
-        fig, ax = plt.subplots(nof_ifs, 1, figsize = (10,10))
-        fig.suptitle(f"Antenna {ant} delays")
-        if nof_ifs > 1:
-            for i in range(nof_ifs):
-                ax[i].plot(time_range, delays[i,:], label=f"IF_{i}")
-        else:
-            ax.plot(time_range, delays[:], label=f"all_IF's")
-        fig.legend()
-        fig.text(0.5, 0.04, 'time (s)', ha='center')
-        fig.text(0.04, 0.5, 'delay (ns)', va='center', rotation='vertical')
-        fig.savefig(os.path.join(output_dir, f"{ant}_delay_plot.png"))
-        plt.close()
 
-    for ant, delays in ant_to_delay_rate_dict.items():
-        fig,ax = plt.subplots(1, 1, figsize = (6,6))
-        fig.suptitle(f"Antenna {ant} delay rates")
-        ax.plot(time_range, delays, label="all_IF's")
+    for ant, vals in ant_to_valuematrix_dict.items():
+        fig, ax = plt.subplots(4, 1, figsize = (10,10))
+        fig.suptitle(f"{ant} {suptitle}")
+
+        for i in range(4):
+            ax[i].plot(time_range, vals[i,:], label=f"IF_{i}")
+
         fig.legend()
-        fig.text(0.5, 0.04, 'time (s)', ha='center')
-        fig.text(0.04, 0.5, 'delay rate (ns/s)', va='center', rotation='vertical')
-        fig.savefig(os.path.join(output_dir, f"{ant}_delay_rate_plot.png"))
+        fig.text(0.5, 0.04, x_ax, ha='center')
+        fig.text(0.04, 0.5, y_ax, va='center', rotation='vertical')
+        fig.savefig(os.path.join(output_dir, f"{ant}_suptitle_plot.png"))
         plt.close()
 
 if __name__ == "__main__":
@@ -87,15 +85,15 @@ if __name__ == "__main__":
     parser.add_argument("--dec", type=float, default=0.0, help="declination in degrees as a floating point")
     parser.add_argument("--start_time", type=float, default=0.0, help="start time in seconds from start of epoch")
     parser.add_argument("--stop_time", type=float, default=1, help="stop time in seconds from start of epoch")
-    parser.add_argument("--ntime", type=float, required=False, default=100, help="number of delay values to compute over stop_time - start_time")
-    parser.add_argument("--plot", type=bool, required=False, default=True, help="""Generate plots per antenna of the delays per IF over the specified time span
+    parser.add_argument("--ntime", type=int, required=False, default=100, help="number of delay values to compute over stop_time - start_time")
+    parser.add_argument("--plot", action='store_true', help="""Generate plots per antenna of the delays per IF over the specified time span
                                                                 if True, otherwise write delay and delay rates to CSV files.""")
-    parser.add_argument("--add_calibration_delays", type=bool, required=False, default=False,
+    parser.add_argument("--add_calibration_delays", type=bool, required=False, default=True,
                                                                 help="Include the telescope calibration delays in the output.")
     parser.add_argument("--out_dir", type=str, required=False, default="./delay_outputs")
     args = parser.parse_args()
 
-    time_range = np.arange(args.start_time, args.stop_time, args.time_granularity)
+    time_range = np.linspace(args.start_time, args.stop_time, args.ntime)
 
     calib_delays = redis_hget_keyvalues(redis_obj, "META_calibrationDelays")
 
@@ -103,7 +101,7 @@ if __name__ == "__main__":
     delay_model.source = SkyCoord(args.ra, args.dec, unit='deg')
     model_delays = delay_model.calculate_delay(publish = False)
 
-    ant_to_delay_dict, ant_to_delay_rate_dict = gen_delay_vectors(model_delays, calib_delays, time_range, use_calib=args.add_calibration_delays)
+    ant_to_delay_dict,ant_to_delay_rate_dict,ant_to_phase_dict,ant_to_phase_rate_dict  = gen_delay_vectors(model_delays, calib_delays, time_range, use_calib=args.add_calibration_delays)
 
     if args.out_dir:
         if os.path.isdir(args.out_dir):
@@ -112,10 +110,42 @@ if __name__ == "__main__":
             os.makedirs(args.out_dir)
 
     if args.plot:
-        plot_delays_and_rates(ant_to_delay_dict, ant_to_delay_rate_dict, time_range, args.out_dir)
+        plotter(ant_to_delay_dict,time_range,args.out_dir,"delays over time","Delay (ns)","Time (s)")
+        plotter(ant_to_delay_rate_dict,time_range,args.out_dir,"delay rates over time","Delay rate (ns/s)","Time (s)")
+        plotter(ant_to_phase_dict,time_range,args.out_dir,"phases over time","Phase (radians)","Time (s)")
+        plotter(ant_to_phase_rate_dict,time_range,args.out_dir,"delays over time","Phase rate (radians/s)","Time (s)")
     else:
-        pd.DataFrame.from_dict(ant_to_delay_dict).to_csv(f"antenna_delays_ra{args.ra}_dec{args.dec}.csv")
-        pd.DataFrame.from_dict(ant_to_delay_rate_dict).to_csv(f"antenna_delay_rates_ra{args.ra}_dec{args.dec}.csv")
+        time_range = time_range.tolist()
+        #tolist np arrays:
+        for ant, delay in ant_to_delay_dict.items():
+            ant_to_delay_dict[ant] = delay.tolist()
+        for ant, delay_rate in ant_to_delay_rate_dict.items():
+            ant_to_delay_rate_dict[ant] = delay_rate.tolist()
+        for ant, phase in ant_to_phase_dict.items():
+            ant_to_phase_dict[ant] = phase.tolist()
+        for ant, phase_rate in ant_to_phase_rate_dict.items():
+            ant_to_phase_rate_dict[ant] = phase_rate.tolist()
+
+        with open(os.path.join(args.out_dir,f"antenna_delays_ra{args.ra}_dec{args.dec}.json"), 'w') as f:
+            ant_to_delay_dict['ra'] = args.ra
+            ant_to_delay_dict['dec'] = args.dec
+            ant_to_delay_dict['time_range'] = time_range
+            json.dump(ant_to_delay_dict, f)
+        with open(os.path.join(args.out_dir,f"antenna_delay_rates_ra{args.ra}_dec{args.dec}.json"), 'w') as f:
+            ant_to_delay_rate_dict['ra'] = args.ra
+            ant_to_delay_rate_dict['dec'] = args.dec
+            ant_to_delay_rate_dict['time_range'] = time_range
+            json.dump(ant_to_delay_rate_dict, f)
+        with open(os.path.join(args.out_dir,f"antenna_phases_ra{args.ra}_dec{args.dec}.json"), 'w') as f:
+            ant_to_phase_dict['ra'] = args.ra
+            ant_to_phase_dict['dec'] = args.dec
+            ant_to_phase_dict['time_range'] = time_range
+            json.dump(ant_to_phase_dict, f)
+        with open(os.path.join(args.out_dir,f"antenna_phase_rates_ra{args.ra}_dec{args.dec}.json"), 'w') as f:
+            ant_to_phase_rate_dict['ra'] = args.ra
+            ant_to_phase_rate_dict['dec'] = args.dec
+            ant_to_phase_rate_dict['time_range'] = time_range
+            json.dump(ant_to_phase_rate_dict, f)
     
 
 
