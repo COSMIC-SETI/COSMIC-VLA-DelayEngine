@@ -69,7 +69,7 @@ class DelayModel(threading.Thread):
 
         #initialise the source coordinates
         logger.info("Collecting initial ra and dec positions...")
-        self._calc_source_coords_from_radec(redis_hget_keyvalues(
+        self._calc_source_coords_and_lo_eff_from_obs_meta(redis_hget_keyvalues(
             self.redis_obj, "META"
         ))
 
@@ -91,6 +91,11 @@ class DelayModel(threading.Thread):
             target=self.redis_chan_listener, args=(), daemon=False
         )
 
+    def run(self):
+        """
+        Start the threads that listen for source coordinate updates and
+        calculate fresh delays.
+        """
         logger.info("Starting source coord listener...")
         self.listen_for_source.start()
         logger.info("Starting delay calculation thread...")
@@ -119,18 +124,19 @@ class DelayModel(threading.Thread):
         data = {"X":X, "Y":Y, "Z":Z}
         df = pd.DataFrame(data, index=ANTNAMES)
         self.itrf = df[df.index.notnull()]
-        logger.info("Received new antenna position values. Publishing now...")
+        logger.info("Collected antenna position values. Publishing now...")
         redis_publish_dict_to_hash(self.redis_obj, "META_antennaITRF",  self.itrf.to_dict('index'))
     
-    def _calc_source_coords_from_radec(self, obs_meta):
+    def _calc_source_coords_and_lo_eff_from_obs_meta(self, obs_meta):
         """
         Accept an meta obs dictionary and calculate source
         coordinates from the ra/dec contained therein
         """
         self.ra = obs_meta.get('ra_deg')
         self.dec = obs_meta.get('dec_deg')
+        self.lo_eff = obs_meta.get('sslo')
         self.source = SkyCoord(self.ra, self.dec, unit='deg')
-        logger.info(f"Received new ra value: {self.ra} and dec value {self.dec}")
+        logger.info(f"Collected ra {self.ra}, dec {self.dec} and sslo {self.lo_eff} from obs_meta.")
 
     def redis_chan_listener(self):
         """This function listens for updates on the  "meta_antennaproperties"
@@ -152,9 +158,9 @@ class DelayModel(threading.Thread):
                     self._calc_itrf_from_antprop(ant2prop)
                 if message['channel'] == "meta_obs":
                     obsmeta = json.loads(message.get('data'))
-                    self._calc_source_coords_from_radec(obsmeta)    
+                    self._calc_source_coords_and_lo_eff_from_obs_meta(obsmeta)    
     
-    def calculate_delay(self):
+    def calculate_delay(self, publish : bool = True):
         """
         Started in a thread, this function will take the updated right ascension and
         declination in conjunction with the antenna positions (in itrf measurements)
@@ -162,6 +168,9 @@ class DelayModel(threading.Thread):
         From these delay values we can produce delay rate and delay rate rate values
         so that the fengines may interpolate delays while waiting for new delay value
         updates.
+        If started manually so that the delay dictionary is returned, this function
+        makes use of the redis hash antenna coordinates and source coordinates. Therefore
+        for custom coordinates, self.itrf or self.source must be overwritten.
         """
         while True:
             redis_publish_service_pulse(self.redis_obj, SERVICE_NAME)
@@ -200,9 +209,15 @@ class DelayModel(threading.Thread):
             self.delay_data["delay_ns"] = (-1.0*delay1*1e9).tolist()
             self.delay_data["delay_rate_nsps"] = (rate1*1e9).tolist()
             self.delay_data["delay_raterate_nsps2"] = (raterate*1e9).tolist()
+            self.delay_data["effective_lo_0_hz"] = self.lo_eff[0]
+            self.delay_data["effective_lo_1_hz"] = self.lo_eff[1]
             self.delay_data["time_value"] = t
-            self.publish_delays()
-    
+
+            if publish:
+                self.publish_delays()
+            else:
+                return pd.DataFrame(self.delay_data, index=list(self.itrf.index.values)).to_dict('index')
+
     def publish_delays(self):
         """
         Push out delay values on individual channels for each antenna. Then
@@ -232,3 +247,4 @@ if __name__ == "__main__":
     else:
         logger.info("Nothing to clean, continuing...")
     delayModel = DelayModel(redis_obj)
+    delayModel.run()
