@@ -66,6 +66,8 @@ class DelayLogger:
                         delay_dict["tracking"] = "half-off"
                     elif (feng.delay_track.is_set() and feng.delay_halfphase.is_set()):
                         delay_dict["tracking"] = "half-phase"
+                    elif (feng.delay_track.is_set() and feng.delay_halfphasecorrection.is_set()):
+                        delay_dict["tracking"] = "half-corrected-phase"
                     else:
                         delay_dict["tracking"] = "fixed-only"
 
