@@ -236,8 +236,8 @@ class DelayModel(threading.Thread):
             self.delay_data["delay_ns"] = (-1.0*delay1*1e9).tolist()
             self.delay_data["delay_rate_nsps"] = (rate1*1e9).tolist()
             self.delay_data["delay_raterate_nsps2"] = (raterate*1e9).tolist()
-            self.delay_data["effective_lo_0_hz"] = self.lo_eff[0]
-            self.delay_data["effective_lo_1_hz"] = self.lo_eff[1]
+            self.delay_data["effective_lo_0_mhz"] = self.lo_eff[0]
+            self.delay_data["effective_lo_1_mhz"] = self.lo_eff[1]
             self.delay_data["sideband_0"] = self.sideband[0]
             self.delay_data["sideband_1"] = self.sideband[1]
             self.delay_data["time_value"] = t
