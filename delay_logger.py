@@ -58,7 +58,7 @@ class DelayLogger:
                     delay_dict = delay_status_dict[ant]
                     delay_dict["on"] = str(feng.delay_switch.is_set())
                     if (feng.delay_track.is_set() and not feng.delay_halfoff.is_set() and not feng.delay_halfcal.is_set()
-                        and not feng.delay_halfphase.is_set()):
+                        and not feng.delay_halfphase.is_set() and not feng.delay_halfphasecorrection.is_set()):
                         delay_dict["tracking"] = "True"
                     elif (feng.delay_track.is_set() and feng.delay_halfcal.is_set()):
                         delay_dict["tracking"] = "half-cal"
