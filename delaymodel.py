@@ -82,8 +82,8 @@ class DelayModel(threading.Thread):
             "delay_ns":None,
             "delay_rate_nsps":None,
             "delay_raterate_nsps2":None,
-            "effective_lo_0_hz":None,
-            "effective_lo_1_hz":None,
+            "effective_lo_0_mhz":None,
+            "effective_lo_1_mhz":None,
             "sideband_0":None,
             "sideband_1":None,
             "time_value":None
