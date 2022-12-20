@@ -26,28 +26,29 @@ def gen_delay_vectors(model_delays, calib_delays, time_range, use_calib=False):
     for ant, calib_delay in calib_delays.items():
         if ant in model_delays:
 
-            time = time_range - model_delays[ant]["time_value"]
+            time_diff = time_range - model_delays[ant]["time_value"]
 
-            eff_lo_0 = model_delays[ant]["effective_lo_0_hz"] / 1e9 # gigahertz
-            eff_lo_1 = model_delays[ant]["effective_lo_1_hz"] / 1e9 # gigahertz
+            eff_lo_0 = model_delays[ant]["effective_lo_0_mhz"] * 1e-3 # gigahertz
+            eff_lo_1 = model_delays[ant]["effective_lo_1_mhz"] * 1e-3 # gigahertz
+            sideband_0 = model_delays[ant]["sideband_0"] 
+            sideband_1 = model_delays[ant]["sideband_1"] 
+            if use_calib:
+                c_delays = np.reshape(np.fromiter(calib_delay.values(),dtype=float),(4,1))
+            else:
+                c_delays = np.zeros((4,1))
+            nof_ifs,_ = c_delays.shape
 
-            for i, c_delay in enumerate(calib_delay.values()):
-                if use_calib:
-                    ant_to_delay_dict[f"{ant}_{i}"] = (model_delays[ant]["delay_raterate_nsps2"] * (time**2) +
-                                        (model_delays[ant]["delay_rate_nsps"] * time) +
-                                        (model_delays[ant]["delay_ns"] + c_delay))
-                else:
-                    ant_to_delay_dict[f"{ant}_{i}"] = (model_delays[ant]["delay_raterate_nsps2"] * (time**2) +
-                                        (model_delays[ant]["delay_rate_nsps"] * time) +
-                                        (model_delays[ant]["delay_ns"]))
-                ant_to_delay_rate_dict[f"{ant}_{i}"] = ((model_delays[ant]["delay_raterate_nsps2"] * time) +
-                                            (model_delays[ant]["delay_rate_nsps"]))
-                if i < 2:
-                    ant_to_phase_dict[f"{ant}_{i}"] = (2*np.pi) * ant_to_delay_dict[f"{ant}_{i}"] * eff_lo_0 
-                    ant_to_phase_rate_dict[f"{ant}_{i}"] = (2*np.pi) * ant_to_delay_rate_dict[f"{ant}_{i}"] * eff_lo_0 
-                else:
-                    ant_to_phase_dict[f"{ant}_{i}"] = (2*np.pi) * ant_to_delay_dict[f"{ant}_{i}"] * eff_lo_1 
-                    ant_to_phase_rate_dict[f"{ant}_{i}"] = (2*np.pi) * ant_to_delay_rate_dict[f"{ant}_{i}"] * eff_lo_1 
+            ant_to_delay_dict[f"{ant}"] = np.tile((model_delays[ant]["delay_raterate_nsps2"] * (time_diff**2) +
+                                (model_delays[ant]["delay_rate_nsps"] * time_diff) +
+                                (model_delays[ant]["delay_ns"])),(nof_ifs,1)) + c_delays
+
+            ant_to_delay_rate_dict[f"{ant}"] = np.tile((model_delays[ant]["delay_raterate_nsps2"] * time_diff) +
+                                        (model_delays[ant]["delay_rate_nsps"]),(nof_ifs,1))
+
+            ant_to_phase_dict[f"{ant}"] = -1.0 * np.concatenate(((2*np.pi) * sideband_0 * ant_to_delay_dict[f"{ant}"][0:2,:] * eff_lo_0,
+                                                        (2*np.pi) * sideband_1 * ant_to_delay_dict[f"{ant}"][2:4,:] * eff_lo_1))
+            ant_to_phase_rate_dict[f"{ant}"] = -1.0 * np.concatenate(((2*np.pi) * sideband_0 * ant_to_delay_rate_dict[f"{ant}"][0:2,:] * eff_lo_0,
+                                                        (2*np.pi) * sideband_1 * ant_to_delay_rate_dict[f"{ant}"][2:4,:] * eff_lo_1))
 
     return ant_to_delay_dict, ant_to_delay_rate_dict, ant_to_phase_dict, ant_to_phase_rate_dict
 
@@ -65,16 +66,16 @@ def plotter(ant_to_valuematrix_dict, time_range, output_dir, suptitle, y_ax, x_a
     """
 
     for ant, vals in ant_to_valuematrix_dict.items():
-        fig, ax = plt.subplots(4, 1, figsize = (10,10))
+        fig, ax = plt.subplots(4, 1, figsize = (6,24))
         fig.suptitle(f"{ant} {suptitle}")
 
         for i in range(4):
-            ax[i].plot(time_range, vals[i,:], label=f"IF_{i}")
-
-        fig.legend()
+            ax[i].plot(time_range, vals[i,:], label=f"IF_{i}", color='k', linewidth = 0.6)
+            
         fig.text(0.5, 0.04, x_ax, ha='center')
         fig.text(0.04, 0.5, y_ax, va='center', rotation='vertical')
-        fig.savefig(os.path.join(output_dir, f"{ant}_suptitle_plot.png"))
+        fig.tight_layout()
+        fig.savefig(os.path.join(output_dir, f"{ant}_{suptitle}_plot.png"))
         plt.close()
 
 if __name__ == "__main__":
@@ -88,7 +89,7 @@ if __name__ == "__main__":
     parser.add_argument("--ntime", type=int, required=False, default=100, help="number of delay values to compute over stop_time - start_time")
     parser.add_argument("--plot", action='store_true', help="""Generate plots per antenna of the delays per IF over the specified time span
                                                                 if True, otherwise write delay and delay rates to CSV files.""")
-    parser.add_argument("--add_calibration_delays", type=bool, required=False, default=True,
+    parser.add_argument("--add_calibration_delays", action='store_true',
                                                                 help="Include the telescope calibration delays in the output.")
     parser.add_argument("--out_dir", type=str, required=False, default="./delay_outputs")
     args = parser.parse_args()
@@ -113,9 +114,9 @@ if __name__ == "__main__":
         plotter(ant_to_delay_dict,time_range,args.out_dir,"delays over time","Delay (ns)","Time (s)")
         plotter(ant_to_delay_rate_dict,time_range,args.out_dir,"delay rates over time","Delay rate (ns/s)","Time (s)")
         plotter(ant_to_phase_dict,time_range,args.out_dir,"phases over time","Phase (radians)","Time (s)")
-        plotter(ant_to_phase_rate_dict,time_range,args.out_dir,"delays over time","Phase rate (radians/s)","Time (s)")
+        plotter(ant_to_phase_rate_dict,time_range,args.out_dir,"phase rates over time","Phase rate (radians/s)","Time (s)")
     else:
-        time_range = time_range.tolist()
+        time_range = (time_range - args.start_time).tolist() 
         #tolist np arrays:
         for ant, delay in ant_to_delay_dict.items():
             ant_to_delay_dict[ant] = delay.tolist()
