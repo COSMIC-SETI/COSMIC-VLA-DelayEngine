@@ -46,10 +46,10 @@ class DelayCalibration():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-    description=("Set up the Delay logger.")
+    description=('Collect fixed delays from csv file and publish them to "META_calibrationDelays".')
     )
-    parser.add_argument("calibration_csv", type=str, help="calibration.csv filepath.")
+    parser.add_argument("fixed_csv", type=str, help="path to the latest fixed-delays csv.")
     args = parser.parse_args()
     
-    delayCalibration = DelayCalibration(redis_obj, args.calibration_csv)
+    delayCalibration = DelayCalibration(redis_obj, args.fixed_csv)
     delayCalibration.run()
