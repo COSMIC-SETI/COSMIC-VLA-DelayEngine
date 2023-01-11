@@ -234,7 +234,7 @@ class DelayModel(threading.Thread):
             # Compute the delay rate rate in s/s^2
             raterate = (rate2 - rate1) / (dt)
 
-            self.delay_data["delay_ns"] = (delay1*1e9).tolist()
+            self.delay_data["delay_ns"] = (delay2*1e9).tolist()
             self.delay_data["delay_rate_nsps"] = (rate*1e9).tolist()
             self.delay_data["delay_raterate_nsps2"] = (raterate*1e9).tolist()
             self.delay_data["effective_lo_0_mhz"] = self.lo_eff[0]
