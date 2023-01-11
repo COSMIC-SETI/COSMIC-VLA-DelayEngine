@@ -229,18 +229,19 @@ class DelayModel(threading.Thread):
             # Compute the delay rate in s/s
             rate1 = (delay2 - delay1) / (dt)
             rate2 = (delay3 - delay2) / (dt)
+            rate = (delay3 - delay1) / (2*dt)
 
             # Compute the delay rate rate in s/s^2
             raterate = (rate2 - rate1) / (dt)
 
             self.delay_data["delay_ns"] = (delay1*1e9).tolist()
-            self.delay_data["delay_rate_nsps"] = (rate1*1e9).tolist()
+            self.delay_data["delay_rate_nsps"] = (rate*1e9).tolist()
             self.delay_data["delay_raterate_nsps2"] = (raterate*1e9).tolist()
             self.delay_data["effective_lo_0_mhz"] = self.lo_eff[0]
             self.delay_data["effective_lo_1_mhz"] = self.lo_eff[1]
             self.delay_data["sideband_0"] = self.sideband[0]
             self.delay_data["sideband_1"] = self.sideband[1]
-            self.delay_data["time_value"] = t
+            self.delay_data["time_value"] = tts[1]
 
             if publish:
                 self.publish_delays()
