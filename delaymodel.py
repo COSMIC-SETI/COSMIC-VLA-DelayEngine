@@ -222,9 +222,9 @@ class DelayModel(threading.Thread):
             delay2 = (w2/const.c.value)
             delay3 = (w3/const.c.value)
 
-            delay1 = -delay1
-            delay2 = -delay2
-            delay3 = -delay3
+            # delay1 = -delay1
+            # delay2 = -delay2
+            # delay3 = -delay3
 
             # Compute the delay rate in s/s
             rate1 = (delay2 - delay1) / (dt)
@@ -233,7 +233,7 @@ class DelayModel(threading.Thread):
             # Compute the delay rate rate in s/s^2
             raterate = (rate2 - rate1) / (dt)
 
-            self.delay_data["delay_ns"] = (-1.0*delay1*1e9).tolist()
+            self.delay_data["delay_ns"] = (delay1*1e9).tolist()
             self.delay_data["delay_rate_nsps"] = (rate1*1e9).tolist()
             self.delay_data["delay_raterate_nsps2"] = (raterate*1e9).tolist()
             self.delay_data["effective_lo_0_mhz"] = self.lo_eff[0]
