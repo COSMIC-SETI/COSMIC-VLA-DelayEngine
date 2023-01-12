@@ -3,12 +3,12 @@ import numpy as np
 import argparse
 import astropy.constants as const
 import os
-from cosmic.redis_actions import redis_obj, redis_publish_dict_to_hash
+from cosmic.redis_actions import redis_obj, redis_publish_dict_to_hash, redis_publish_dict_to_channel
 
 #CONSTANTS
 ADVANCE_TIME = (8e3/(0.66*const.c.value)) #largest baseline 8km / (2/3rds c) ~ largest calibration delay in s
 
-class DelayCalibration():
+class DelayCalibrationWriter():
     def __init__(self, redis_obj, calib_csv):
         """
         A delay calibration calculation object.
@@ -39,10 +39,11 @@ class DelayCalibration():
 
     def publish_calibration_delays(self):
         """
-        Push out calibration delay values on individual channels for each antenna.
-        Then push out the full dictionary to a hash for display purposes.
+        Push out the full dictionary to a hash for display purposes.
+        Then push out the trigger for all antenna to update their fixed-delays.
         """
         redis_publish_dict_to_hash(self.redis_obj, "META_calibrationDelays", self.ant2calibmap)
+        redis_publish_dict_to_channel(self.redis_obj, "update_calibration_delays", True)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -51,5 +52,5 @@ if __name__ == "__main__":
     parser.add_argument("fixed_csv", type=str, help="path to the latest fixed-delays csv.")
     args = parser.parse_args()
     
-    delayCalibration = DelayCalibration(redis_obj, args.fixed_csv)
+    delayCalibration = DelayCalibrationWriter(redis_obj, args.fixed_csv)
     delayCalibration.run()
