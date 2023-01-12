@@ -63,12 +63,19 @@ class CalibrationGainCollector():
             self.phase_cal_map[ant+f"_{tuning_idx}"][0] += phase_0
             self.phase_cal_map[ant+f"_{tuning_idx}"][1] += phase_1         
 
-            print("Received phases for tuning: ",tuning_idx, "\n and antenna: ",ant)
         #assume all frequency arrays in the phase dicts are equal but check that we are dealing with the other tuning:
         if not any(f in self.collected_frequencies for f in freqs):
             self.collected_frequencies += freqs
 
     def collect_phases_for_hash_timeout(self, time_to_wait_until):
+        """
+        This function waits for further triggers on the channel indicating that more
+        phase calibration values are available. When triggered, it will concatenate
+        on the new phase values and frequencies until the time expires.
+
+        Args:
+            time_to_wait_until : float, Unix time for the loop to wait until.
+        """
         while time.time() <= time_to_wait_until:
             #Listen for messages on subscribed channels
             message = self.pubsub.get_message(timeout=0.1)
@@ -84,6 +91,10 @@ class CalibrationGainCollector():
         return
 
     def calc_residual_delays_and_phases(self):
+        """
+        Taking all the concatenated phases and frequencies, use a fit of values to determine
+        the residual delays and phases.
+        """
         delay_residual_map = {}
         phase_residual_map = {}
 
@@ -96,11 +107,9 @@ class CalibrationGainCollector():
             residual_phases = np.zeros((self.nof_pols,self.collected_frequencies.size))
             for pol in range(self.nof_pols):
                 if phases_unwrapped[pol,:].size == 0:
-                    print(f"No phases received for antenna_tuning {ant_tune}, pol {pol}")
                     residual_delays[pol] = 0.0
                     residual_phases[pol,:] = np.zeros(self.collected_frequencies.size)
                 else:
-                    print(f"Calculating residual phases and delays for antenna_tuning {ant_tune}, pol {pol}")
                     phase_slope, _ = np.polyfit(self.collected_frequencies, phases_unwrapped[pol,:], 1)
                     residual = phases_unwrapped[pol,:] - (phase_slope * self.collected_frequencies)
                     residual_delays[pol]=phase_slope / (2*np.pi)
@@ -142,21 +151,32 @@ class CalibrationGainCollector():
             #Listen for messages on subscribed channels
             message = self.pubsub.get_message(timeout=0.1)
             if message and "message" == message["type"]:
-                #Initialise a phase calibration array for four streams of zeros:
-                try:
-                    hash_key = str(message.get('data'))
-                except:
-                    print("cannot fetch message")
+                #Get the hash key published on the channel
+                hash_key = str(message.get('data'))
+                
+                #Fetch the relavent payload given the collected hashkey
                 payload = redis_hget_keyvalue(self.redis_obj, "GPU_calibrationPhases", hash_key)
-                filestem = redis_hget_keyvalue(self.redis_obj, "GPU_calibrationPhases",'filestem')
-                metadata = redis_hget_keyvalues(self.redis_obj, "META")
-                # self.basebands = metadata.get('baseband')
-                self.basebands = ['AC_8BIT','BD_8BIT']
-                tune_idx, _ = self.get_tuningidx_and_start_freq(hash_key)
-                self.collected_frequencies = []
-                self.ants = list(payload.keys())
 
-                #create the phase_cal map of antnames -> phase values of shape (nof_streams, nof_channels)
+                #Fetch the filestem associated with the above payload
+                filestem = redis_hget_keyvalue(self.redis_obj, "GPU_calibrationPhases",'filestem')
+                
+                #Fetch and calculate needed metadata
+                metadata = redis_hget_keyvalues(self.redis_obj, "META")
+                self.basebands = metadata.get('baseband')
+                tune_idx, _ = self.get_tuningidx_and_start_freq(hash_key)
+                fcent_mhz = metadata['fcents'][tune_idx]
+                print("Observation center frequency: ",fcent_mhz,"MHz")
+                fcent_hz = fcent_mhz * 1e6
+                self.ants = list(payload.keys())
+                channel_width_hz = payload[self.ants[0]]['freq_array'][1] - payload[self.ants[0]]['freq_array'][0]
+                print("Channel width: ",channel_width_hz,"Hz")
+                start_observation_channel_frequencies_hz = fcent_hz - (self.nof_channels//2)*channel_width_hz
+                stop_observation_channel_frequencies_hz = fcent_hz + (self.nof_channels//2)*channel_width_hz
+                self.full_observation_channel_frequencies_hz = np.arange(start_observation_channel_frequencies_hz, stop_observation_channel_frequencies_hz, channel_width_hz)
+                print("Full observation channel frequncies: ",self.full_observation_channel_frequencies_hz,"\n of size: ",self.full_observation_channel_frequencies_hz.size)
+
+                #Initialise some empty dicts and arrays for population during this process
+                self.collected_frequencies = []
                 self.phase_cal_map ={}
                 self.full_residual_phase_map={}
                 self.full_residual_delay_map={}
@@ -168,30 +188,17 @@ class CalibrationGainCollector():
                 for ant,tuning_idx in itertools.product(self.ants, range(2)):
                     self.phase_cal_map[ant+f"_{tuning_idx}"] = [[],[]]
 
-                fcent_mhz = metadata['fcents'][tune_idx]
-                print("Observation center frequency: ",fcent_mhz,"MHz")
-                fcent_hz = fcent_mhz * 1e6
-                #spoofing fcents
-                fcent_hz = np.median(payload[self.ants[0]]['freq_array'])
-                print("Observation center frequency: ",fcent_hz,"Hz")
-                channel_width_hz = payload[self.ants[0]]['freq_array'][1] - payload[self.ants[0]]['freq_array'][0]
-                print("Channel width: ",channel_width_hz,"Hz")
-                start_observation_channel_frequencies_hz = fcent_hz - (self.nof_channels//2)*channel_width_hz
-                stop_observation_channel_frequencies_hz = fcent_hz + (self.nof_channels//2)*channel_width_hz
-
-                self.full_observation_channel_frequencies_hz = np.arange(start_observation_channel_frequencies_hz, stop_observation_channel_frequencies_hz, channel_width_hz)
-                print("Full observation channel frequncies: ",self.full_observation_channel_frequencies_hz,"\n of size: ",self.full_observation_channel_frequencies_hz.size)
-                
+                #Given the above message, populate the first batch of data
                 self.populate_phase_cal_map(payload, tune_idx)
 
                 #Listen for new messages for the hash timeout period
                 time_to_wait_until = time.time() + self.hash_timeout
                 self.collect_phases_for_hash_timeout(time_to_wait_until) 
 
-                #calculate residual delays/phases, save them and publish them
+                #calculate residual delays/phases for the collected frequencies
                 delay_residual_map, phase_residual_map = self.calc_residual_delays_and_phases()
 
-                #Create residual phase array in correct frequency placement and mangle residual delays into correct placement
+                #Create residual phase array in correct frequency placement and order residual delays
                 self.correctly_place_residual_phases_and_delays(phase_residual_map, delay_residual_map)
 
                 #For json dumping:
@@ -201,50 +208,49 @@ class CalibrationGainCollector():
                     t_delay_dict[ant] = self.full_residual_delay_map[ant].tolist() 
                     t_phase_dict[ant] = val.tolist() 
 
+                #Save residual delays
                 delay_filename = os.path.join("/home/cosmic/dev/logs/calibration_logs/",f"calibrationdelayresiduals_{filestem}.json")
                 print("Wrote out calculated residual delays to: ",delay_filename)
-
                 with open(delay_filename, 'w') as f:
                     json.dump(t_delay_dict, f)
                 redis_publish_dict_to_hash(self.redis_obj, "META_residualDelays",t_delay_dict)
 
-
+                #Save residual phases
                 phase_filename = os.path.join("/home/cosmic/dev/logs/calibration_logs/",f"calibrationphaseresiduals_{filestem}.json")
                 print("Wrote out calculated residual phases to: ",phase_filename)
-
                 with open(phase_filename, 'w') as f:
                     json.dump(t_phase_dict, f)
                 redis_publish_dict_to_hash(self.redis_obj, "META_residualPhases",t_phase_dict)
                 
+                #In the event of a wet run, we want to update fixed delays as well as load phase calibrations to the F-Engines
                 if not self.dry_run:
                     #load phases to F-Engines
                     for ant, feng in self.ant_feng_map.items():
                         for stream in range(self.nof_streams):
                             #One of the ones we computed phases for:
                             if ant in self.full_residual_phase_map:
-                                # try:
-                                wrap_phases = (self.full_residual_phase_map[ant][stream,:]  + np.pi) % (2 * np.pi) - np.pi
-                                feng.phaserotate.set_phase_cal(
-                                    stream,   
-                                    wrap_phases.tolist()
-                                )
-                                # except:
-                                #     print("Could not write out phase calibrations to the antenna: ",ant)
+                                try:
+                                    wrap_phases = (self.full_residual_phase_map[ant][stream,:]  + np.pi) % (2 * np.pi) - np.pi
+                                    feng.phaserotate.set_phase_cal(
+                                        stream,   
+                                        wrap_phases.tolist()
+                                    )
+                                except:
+                                    print("Could not write out phase calibrations to the antenna: ",ant)
                             #Zero the rest:
                             else:
-                                # try:
-                                feng.phaserotate.set_phase_cal(
-                                    stream,
-                                    np.zeros(1024).tolist()
-                                )
-                                # except:
-                                    # print("Could not write out zeros to the antenna: ",ant)
+                                try:
+                                    feng.phaserotate.set_phase_cal(
+                                        stream,
+                                        np.zeros(1024).tolist()
+                                    )
+                                except:
+                                    print("Could not write out zeros to the antenna: ",ant)
 
                     # update fixed_delays
                     fixed_delays = pd.read_csv(os.path.abspath(self.fixed_csv), names = ["IF0","IF1","IF2","IF3"],
                                 header=None, skiprows=1)
                     fixed_delays = fixed_delays.to_dict()
-                   
                     updated_fixed_delays = {}
                     for i, tune in enumerate(list(fixed_delays.keys())):
                         sub_updated_fixed_delays = {}
@@ -261,11 +267,19 @@ class CalibrationGainCollector():
                     df = pd.DataFrame.from_dict(updated_fixed_delays)
                     df.to_csv(modified_fixed_delays_path)
 
+                    #Publish the new fixed delays and trigger the F-Engines to load them
                     delay_calibration = DelayCalibrationWriter(self.redis_obj, modified_fixed_delays_path)
                     delay_calibration.run()
 
+                    #Overwrite the csv to the new csv for modification in the next run
                     self.fixed_csv = modified_fixed_delays_path
 
+                    # freqs_sorted =  np.sort(self.collected_frequencies)
+                    # print("-------------------------------------------------------------")
+                    # print(f"Calculated phase and delay residuals off frequencies: {freqs_sorted[0]}:{freqs_sorted[-1]}Hz")
+                    # print("-------------------------------------------------------------")
+
+                #Sleep
                 time.sleep(self.re_arm_time)
             
 
