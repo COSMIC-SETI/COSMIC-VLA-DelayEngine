@@ -3,6 +3,8 @@ import numpy as np
 import itertools
 import argparse
 import os
+import logging
+from logging.handlers import RotatingFileHandler
 import redis
 import time
 import json
@@ -10,15 +12,38 @@ from delaycalibration import DelayCalibrationWriter
 from cosmic.fengines import ant_remotefeng_map
 from cosmic.redis_actions import redis_obj, redis_hget_keyvalues, redis_publish_dict_to_hash, redis_clear_hash_contents
 
+LOGFILENAME = "/home/cosmic/logs/DelayCalibration.log"
+logger = logging.getLogger('calibration_delays')
+logger.setLevel(logging.INFO)
+
+# create console handler and set level to debug
+ch = logging.StreamHandler()
+ch.setLevel(logging.INFO)
+fh = RotatingFileHandler(LOGFILENAME, mode = 'a', maxBytes = 512, backupCount = 0, encoding = None, delay = False)
+fh.setLevel(logging.INFO)
+
+# create formatter
+formatter = logging.Formatter("[%(asctime)s - %(levelname)s - %(filename)s:%(lineno)s] %(message)s")
+
+# add formatter to ch
+ch.setFormatter(formatter)
+fh.setFormatter(formatter)
+
+# add ch to logger
+logger.addHandler(ch)
+logger.addHandler(fh)
+
 GPU_PHASES_REDIS_HASH = "GPU_calibrationPhases"
 
 class CalibrationGainCollector():
-    def __init__(self, redis_obj, fixed_csv, hash_timeout=20, re_arm_time = 30, dry_run = False, nof_streams = 4, nof_tunings = 2, nof_pols = 2, nof_channels = 1024):
+    def __init__(self, redis_obj, fixed_csv, hash_timeout=20, re_arm_time = 30, dry_run = False, no_phase_cal = False,
+    nof_streams = 4, nof_tunings = 2, nof_pols = 2, nof_channels = 1024):
         self.redis_obj = redis_obj
         self.fixed_csv = fixed_csv
         self.hash_timeout = hash_timeout
         self.re_arm_time = re_arm_time
         self.dry_run = dry_run
+        self.no_phase_cal = no_phase_cal
         self.nof_streams = nof_streams
         self.nof_channels = nof_channels
         self.nof_tunings = nof_tunings
@@ -38,8 +63,10 @@ class CalibrationGainCollector():
         try:
             pubsub.subscribe("gpu_calibrationphases")
         except redis.RedisError:
-            raise redis.RedisError("""Unable to subscribe to gpu_calibrationphases channel to listen for 
+            logger.error("""Unable to subscribe to gpu_calibrationphases channel to listen for 
         changes to GPU_calibrationPhases.""")
+            return False
+        logger.info("Calibration process is armed and awaiting triggers from GPU nodes.")
         while True:
             #Listen for first message on subscribed channels - ignoring None
             message = pubsub.get_message(timeout=0.1)
@@ -81,10 +108,10 @@ class CalibrationGainCollector():
 
         for start_freq_tune, payload in calibration_phases.items():
             tune_idx, start_freq = self.get_tuningidx_and_start_freq(start_freq_tune)
-            print(f"Processing tuning {tune_idx}, start freq {start_freq}...")
+            logger.debug(f"Processing tuning {tune_idx}, start freq {start_freq}...")
             filestem_t = payload['filestem']
             if filestem is not None and filestem_t != filestem:
-                print(f"""Skipping {start_freq_tune} payload since it contains differing filestem {filestem_t}
+                logger.error(f"""Skipping {start_freq_tune} payload since it contains differing filestem {filestem_t}
                 to previously encountered filestem {filestem}.""")
                 continue
             else:
@@ -173,10 +200,21 @@ class CalibrationGainCollector():
             #find sorted frequency indices
             frequency_indices[tuning] = full_observation_channel_frequencies[tuning,:].searchsorted(collected_frequencies[tuning])
 
-        print("-------------------------------------------------------------")
-        print(f"Calculated phase and delay residuals for tuning 0 off frequencies: {collected_frequencies[0][0]}:{collected_frequencies[0][-1]}Hz")
-        print(f"Calculated phase and delay residuals for tuning 1 off frequencies: {collected_frequencies[1][0]}:{collected_frequencies[1][-1]}Hz")
-        print("-------------------------------------------------------------")
+        print(full_observation_channel_frequencies.shape)
+        print(full_observation_channel_frequencies[0,:])
+        
+        logger.info("-------------------------------------------------------------")
+        try:
+            logger.info(f"""Calculating phase and delay residuals for tuning 0 off frequencies: {collected_frequencies[0][0]}->{collected_frequencies[0][-1]}Hz\n
+            while total observation frequencies for tuning 0 are: {full_observation_channel_frequencies[0,0]}->{full_observation_channel_frequencies[0,-1]}Hz""")
+        except IndexError:
+            logger.info(f"No values received for tuning 0, and so no residuals will be calculated for that tuning.")
+        try:
+            logger.info(f"""Calculating phase and delay residuals for tuning 1 off frequencies: {collected_frequencies[1][0]}->{collected_frequencies[1][-1]}Hz\n
+            while total observation frequencies for tuning 0 are: {full_observation_channel_frequencies[1,0]}->{full_observation_channel_frequencies[1,-1]}Hz""")
+        except IndexError:
+            logger.info(f"No values received for tuning 1, and so no residuals will be calculated for that tuning.")
+        logger.info("-------------------------------------------------------------")
 
         #Initialise full_residual_phase_map and full_residual_delay_map
         phase_zeros = np.zeros((self.nof_streams, self.nof_channels))
@@ -205,6 +243,8 @@ class CalibrationGainCollector():
             #Launch function that waits for first valid message:
             trigger = self.await_trigger()
             if trigger:
+                logger.info(f"""Calibration process has been triggered.\n
+                Dry run = {self.dry_run}, applying phase calibrations = {self.no_phase_cal}""")
                 #Fetch and calculate needed metadata
                 metadata = redis_hget_keyvalues(self.redis_obj, "META")
                 # self.basebands = metadata.get('baseband')
@@ -212,18 +252,18 @@ class CalibrationGainCollector():
                     "AC_8BIT",
                     "BD_8BIT"
                     ]
-                print("Observation meta reports basebands: ",self.basebands)
+                logger.info(f"Observation meta reports basebands: {self.basebands}")
                 # fcent_mhz = np.array(metadata['fcents'],dtype=float)
                 fcent_mhz = [
                     2477.0,
                     3501.0
                     ]
-                print("Observation meta reports fcents: ",fcent_mhz,"MHz")
+                logger.info(f"Observation meta reports fcents: {fcent_mhz}MHz")
                 fcent_hz = np.array(fcent_mhz)*1e6
                 # tbin = float(metadata['tbin'])
                 tbin = 1e-6
                 channel_bw = 1/tbin
-                print(f"Expected channel bandwidth: {channel_bw}Hz")
+                logger.info(f"Expected channel bandwidth: {channel_bw}Hz")
 
                 #Start function that waits for hash_timeout before collecting redis hash.
                 ant_tune_to_collected_phase, collected_frequencies, self.ants, filestem = self.collect_phases_for_hash_timeout(self.hash_timeout) 
@@ -252,14 +292,14 @@ class CalibrationGainCollector():
 
                 #Save residual delays
                 delay_filename = os.path.join("/home/cosmic/dev/logs/calibration_logs/",f"calibrationdelayresiduals_{filestem}.json")
-                print("Wrote out calculated residual delays to: ",delay_filename)
+                logger.info(f"Wrote out calculated residual delays to: {delay_filename}")
                 with open(delay_filename, 'w') as f:
                     json.dump(t_delay_dict, f)
                 redis_publish_dict_to_hash(self.redis_obj, "META_residualDelays", t_delay_dict)
 
                 #Save residual phases
                 phase_filename = os.path.join("/home/cosmic/dev/logs/calibration_logs/",f"calibrationphaseresiduals_{filestem}.json")
-                print("Wrote out calculated residual phases to: ",phase_filename)
+                logger.info(f"Wrote out calculated residual phases to: {phase_filename}")
                 with open(phase_filename, 'w') as f:
                     json.dump(t_phase_dict, f)
                 redis_publish_dict_to_hash(self.redis_obj, "META_residualPhases",t_phase_dict)
@@ -267,26 +307,27 @@ class CalibrationGainCollector():
                 #In the event of a wet run, we want to update fixed delays as well as load phase calibrations to the F-Engines
                 if not self.dry_run:
                     #load phases to F-Engines
-                    for ant, feng in self.ant_feng_map.items():
-                        for stream in range(self.nof_streams):
-                            #Check if ant is one of the ones we computed phases for:
-                            if ant in full_residual_phase_map:
-                                try:
-                                    feng.phaserotate.set_phase_cal(
-                                        stream,   
-                                        full_residual_phase_map[ant][stream,:].tolist()
-                                    )
-                                except:
-                                    print("Could not write out phase calibrations to the antenna: ",ant)
-                            #Zero the rest:
-                            else:
-                                try:
-                                    feng.phaserotate.set_phase_cal(
-                                        stream,
-                                        [0.0]*1024
-                                    )
-                                except:
-                                    print("Could not write out zeros to the antenna: ",ant)
+                    if not self.no_phase_cal:
+                        for ant, feng in self.ant_feng_map.items():
+                            for stream in range(self.nof_streams):
+                                #Check if ant is one of the ones we computed phases for:
+                                if ant in full_residual_phase_map:
+                                    try:
+                                        feng.phaserotate.set_phase_cal(
+                                            stream,   
+                                            full_residual_phase_map[ant][stream,:].tolist()
+                                        )
+                                    except:
+                                        logger.error(f"Could not write out phase calibrations to the antenna: {ant}")
+                                #Zero the rest:
+                                else:
+                                    try:
+                                        feng.phaserotate.set_phase_cal(
+                                            stream,
+                                            [0.0]*1024
+                                        )
+                                    except:
+                                        logger.error(f"Could not write out zeros to the antenna: {ant}")
 
                     # update fixed_delays
                     fixed_delays = pd.read_csv(os.path.abspath(self.fixed_csv), names = ["IF0","IF1","IF2","IF3"],
@@ -309,7 +350,7 @@ class CalibrationGainCollector():
                     else:
                         modified_fixed_delays_path = "/home/cosmic/dev/logs/calibration_logs/"+os.path.basename(self.fixed_csv).split('.')[0]+"%"+filestem+".csv" 
                     
-                    print("Wrote out modified fixed delays to: ",modified_fixed_delays_path)
+                    logger.info(f"Wrote out modified fixed delays to: {modified_fixed_delays_path}")
                     df = pd.DataFrame.from_dict(updated_fixed_delays)
                     df.to_csv(modified_fixed_delays_path)
 
@@ -321,11 +362,14 @@ class CalibrationGainCollector():
                     self.fixed_csv = modified_fixed_delays_path
 
                 #Sleep
+                logger.info(f"Sleeping for {self.re_arm_time}s. Will not detect any channel triggers during this time.")
                 time.sleep(self.re_arm_time)
+                logger.info(f"Clearing redis hash: {GPU_PHASES_REDIS_HASH} contents in anticipation of next calibration run.")
                 redis_clear_hash_contents(self.redis_obj, GPU_PHASES_REDIS_HASH)
             
 
 if __name__ == "__main__":
+
     parser = argparse.ArgumentParser(
     description=("""Listen for updates to GPU hashes containing calibration phases
     and generate residual delays and load calibration phases to the F-Engines.""")
@@ -336,10 +380,13 @@ if __name__ == "__main__":
     calcualted and written to redis/file but not loaded to the F-Engines nor applied to the existing fixed-delays.""")
     parser.add_argument("--re-arm-time", type=float, default=20, required=False, help="""After collecting phases
     from GPU nodes and performing necessary actions, the service will sleep for this duration until re-arming""")
+    parser.add_argument("--no-phase-cal", action="store_true", help="""If specified, only residual delays are updated and no
+    phase calibrations are applied.""")
     parser.add_argument("-f","--fixed-delay-to-update", type=str, required=True, help="""
     csv file path to latest fixed delays that must be modified by the residual delays calculated in this script.""")
     args = parser.parse_args()
 
     calibrationGainCollector = CalibrationGainCollector(redis_obj, fixed_csv = args.fixed_delay_to_update, 
-                                hash_timeout = args.hash_timeout, dry_run = args.dry_run, re_arm_time = args.re_arm_time)
+                                hash_timeout = args.hash_timeout, dry_run = args.dry_run, no_phase_cal = args.no_phase_cal,
+                                re_arm_time = args.re_arm_time)
     calibrationGainCollector.start()
