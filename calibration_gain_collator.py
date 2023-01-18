@@ -9,6 +9,9 @@ import redis
 import time
 import json
 from delaycalibration import DelayCalibrationWriter
+from textwrap import dedent
+import pprint
+from cosmic.observations.slackbot import SlackBot
 from cosmic.fengines import ant_remotefeng_map
 from cosmic.redis_actions import redis_obj, redis_hget_keyvalues, redis_publish_dict_to_hash, redis_clear_hash_contents
 
@@ -37,13 +40,14 @@ GPU_PHASES_REDIS_HASH = "GPU_calibrationPhases"
 
 class CalibrationGainCollector():
     def __init__(self, redis_obj, fixed_csv, hash_timeout=20, re_arm_time = 30, dry_run = False, no_phase_cal = False,
-    nof_streams = 4, nof_tunings = 2, nof_pols = 2, nof_channels = 1024):
+    nof_streams = 4, nof_tunings = 2, nof_pols = 2, nof_channels = 1024, slackbot=None):
         self.redis_obj = redis_obj
         self.fixed_csv = fixed_csv
         self.hash_timeout = hash_timeout
         self.re_arm_time = re_arm_time
         self.dry_run = dry_run
         self.no_phase_cal = no_phase_cal
+        self.slackbot = slackbot
         self.nof_streams = nof_streams
         self.nof_channels = nof_channels
         self.nof_tunings = nof_tunings
@@ -58,15 +62,33 @@ class CalibrationGainCollector():
 
         return tuning_index, start_freq
 
+    def log_and_post_slackmessage(self, message, severity = "INFO"):
+        if severity =="INFO":
+            logger.info(message)
+            self.slackbot.post_message(dedent("\
+                INFO:\n" + message))
+        if severity =="WARN":
+            logger.warn(message)
+            self.slackbot.post_message(dedent("\
+                WARNING:\n" + message))
+        if severity =="ERROR":
+            logger.error(message)
+            self.slackbot.post_message(dedent("\
+                ERROR:\n" + message))
+        if severity == "DEBUG":
+            logger.debug(message)
+
     def await_trigger(self):
         pubsub = self.redis_obj.pubsub(ignore_subscribe_messages=True)
         try:
             pubsub.subscribe("gpu_calibrationphases")
         except redis.RedisError:
-            logger.error("""Unable to subscribe to gpu_calibrationphases channel to listen for 
-        changes to GPU_calibrationPhases.""")
+            self.log_and_post_slackmessage("""
+                Unable to subscribe to gpu_calibrationphases 
+                channel to listen for changes to GPU_calibrationPhases.""",
+            severity="ERROR")
             return False
-        logger.info("Calibration process is armed and awaiting triggers from GPU nodes.")
+        self.log_and_post_slackmessage("Calibration process is armed and awaiting triggers from GPU nodes.", severity="INFO")
         while True:
             #Listen for first message on subscribed channels - ignoring None
             message = pubsub.get_message(timeout=0.1)
@@ -108,11 +130,12 @@ class CalibrationGainCollector():
 
         for start_freq_tune, payload in calibration_phases.items():
             tune_idx, start_freq = self.get_tuningidx_and_start_freq(start_freq_tune)
-            logger.debug(f"Processing tuning {tune_idx}, start freq {start_freq}...")
+            self.log_and_post_slackmessage(f"Processing tuning {tune_idx}, start freq {start_freq}...", severity="DEBUG")
             filestem_t = payload['filestem']
             if filestem is not None and filestem_t != filestem:
-                logger.error(f"""Skipping {start_freq_tune} payload since it contains differing filestem {filestem_t}
-                to previously encountered filestem {filestem}.""")
+                self.log_and_post_slackmessage(f"""
+                    Skipping {start_freq_tune} payload since it contains differing filestem {filestem_t}
+                    to previously encountered filestem {filestem}.""", severity="WARNING")
                 continue
             else:
                 del payload['filestem']
@@ -199,22 +222,28 @@ class CalibrationGainCollector():
             collected_frequencies[tuning] = collected_freq[sortings[tuning]]
             #find sorted frequency indices
             frequency_indices[tuning] = full_observation_channel_frequencies[tuning,:].searchsorted(collected_frequencies[tuning])
-
-        print(full_observation_channel_frequencies.shape)
-        print(full_observation_channel_frequencies[0,:])
         
-        logger.info("-------------------------------------------------------------")
+        log_message = """-------------------------------------------------------------"""
         try:
-            logger.info(f"""Calculating phase and delay residuals for tuning 0 off frequencies: {collected_frequencies[0][0]}->{collected_frequencies[0][-1]}Hz\n
-            while total observation frequencies for tuning 0 are: {full_observation_channel_frequencies[0,0]}->{full_observation_channel_frequencies[0,-1]}Hz""")
+            log_message += f"""\n
+            Calculating phase and delay residuals for tuning 0 off frequencies: 
+            {collected_frequencies[0][0]}Hz->{collected_frequencies[0][-1]}Hz\n
+            while total observation frequencies for tuning 0 are: 
+            {full_observation_channel_frequencies[0,0]}->{full_observation_channel_frequencies[0,-1]}Hz"""
         except IndexError:
-            logger.info(f"No values received for tuning 0, and so no residuals will be calculated for that tuning.")
+            log_message += f"""\n
+            No values received for tuning 0, and so no residuals will be calculated for that tuning."""
         try:
-            logger.info(f"""Calculating phase and delay residuals for tuning 1 off frequencies: {collected_frequencies[1][0]}->{collected_frequencies[1][-1]}Hz\n
-            while total observation frequencies for tuning 0 are: {full_observation_channel_frequencies[1,0]}->{full_observation_channel_frequencies[1,-1]}Hz""")
+            log_message += f"""\n
+            Calculating phase and delay residuals for tuning 1 off frequencies: 
+            {collected_frequencies[1][0]}Hz->{collected_frequencies[1][-1]}Hz\n
+            while total observation frequencies for tuning 0 are: 
+            {full_observation_channel_frequencies[1,0]}Hz->{full_observation_channel_frequencies[1,-1]}Hz"""
         except IndexError:
-            logger.info(f"No values received for tuning 1, and so no residuals will be calculated for that tuning.")
-        logger.info("-------------------------------------------------------------")
+            log_message += f"""\n
+            No values received for tuning 1, and so no residuals will be calculated for that tuning."""
+        log_message += "\n-------------------------------------------------------------"
+        self.log_and_post_slackmessage(log_message, severity="INFO")
 
         #Initialise full_residual_phase_map and full_residual_delay_map
         phase_zeros = np.zeros((self.nof_streams, self.nof_channels))
@@ -243,27 +272,40 @@ class CalibrationGainCollector():
             #Launch function that waits for first valid message:
             trigger = self.await_trigger()
             if trigger:
-                logger.info(f"""Calibration process has been triggered.\n
-                Dry run = {self.dry_run}, applying phase calibrations = {self.no_phase_cal}""")
+                self.log_and_post_slackmessage(f"""
+                    Calibration process has been triggered.\n
+                    Dry run = {self.dry_run}, applying phase calibrations = {self.no_phase_cal},
+                    hash timeout = {self.hash_timeout}s and re-arm time = {self.re_arm_time}s""", severity = "INFO")
+
                 #Fetch and calculate needed metadata
-                metadata = redis_hget_keyvalues(self.redis_obj, "META")
-                # self.basebands = metadata.get('baseband')
-                self.basebands = [
-                    "AC_8BIT",
-                    "BD_8BIT"
-                    ]
-                logger.info(f"Observation meta reports basebands: {self.basebands}")
-                # fcent_mhz = np.array(metadata['fcents'],dtype=float)
-                fcent_mhz = [
-                    2477.0,
-                    3501.0
-                    ]
-                logger.info(f"Observation meta reports fcents: {fcent_mhz}MHz")
+                self.log_and_post_slackmessage("Collecting present VLA mcast observation metadata", severity = "INFO")
+                try:
+                    metadata = redis_hget_keyvalues(self.redis_obj, "META")
+                except:
+                    self.log_and_post_slackmessage("Could not collect present VLA mcast metadata. Ignoring trigger...", severity = "ERROR")
+                    continue
+                #FOR SPOOFING:
+                # self.basebands = [
+                #     "AC_8BIT",
+                #     "BD_8BIT"
+                #     ]
+                # fcent_mhz = [
+                #     2477.0,
+                #     3501.0
+                #     ]
+                # tbin = 1e-6
+
+                self.basebands = metadata.get('baseband')
+                fcent_mhz = np.array(metadata['fcents'],dtype=float)
                 fcent_hz = np.array(fcent_mhz)*1e6
-                # tbin = float(metadata['tbin'])
-                tbin = 1e-6
+                tbin = float(metadata['tbin'])
                 channel_bw = 1/tbin
-                logger.info(f"Expected channel bandwidth: {channel_bw}Hz")
+                
+                self.log_and_post_slackmessage(f"""
+                    Observation meta reports:
+                    basebands = {self.basebands}
+                    fcents = {fcent_mhz} MHz
+                    tbin = {tbin}""", severity = "INFO")
 
                 #Start function that waits for hash_timeout before collecting redis hash.
                 ant_tune_to_collected_phase, collected_frequencies, self.ants, filestem = self.collect_phases_for_hash_timeout(self.hash_timeout) 
@@ -292,14 +334,26 @@ class CalibrationGainCollector():
 
                 #Save residual delays
                 delay_filename = os.path.join("/home/cosmic/dev/logs/calibration_logs/",f"calibrationdelayresiduals_{filestem}.json")
-                logger.info(f"Wrote out calculated residual delays to: {delay_filename}")
+                self.log_and_post_slackmessage(f"""
+                    Wrote out calculated residual delays to: 
+                    {delay_filename}""", severity = "DEBUG")
                 with open(delay_filename, 'w') as f:
                     json.dump(t_delay_dict, f)
                 redis_publish_dict_to_hash(self.redis_obj, "META_residualDelays", t_delay_dict)
 
+                pretty_print_json = pprint.pformat(json.dumps(t_delay_dict)).replace("'", '"')
+                self.log_and_post_slackmessage(f"""
+                    Calculated the following delay residuals from UVH5 recording
+                    {filestem}:
+
+                    ```{pretty_print_json}```
+                    """, severity = "INFO")
+
                 #Save residual phases
                 phase_filename = os.path.join("/home/cosmic/dev/logs/calibration_logs/",f"calibrationphaseresiduals_{filestem}.json")
-                logger.info(f"Wrote out calculated residual phases to: {phase_filename}")
+                self.log_and_post_slackmessage(f"""
+                    Wrote out calculated residual phases to: 
+                    {phase_filename}""", severity = "DEBUG")
                 with open(phase_filename, 'w') as f:
                     json.dump(t_phase_dict, f)
                 redis_publish_dict_to_hash(self.redis_obj, "META_residualPhases",t_phase_dict)
@@ -308,6 +362,10 @@ class CalibrationGainCollector():
                 if not self.dry_run:
                     #load phases to F-Engines
                     if not self.no_phase_cal:
+                        self.log_and_post_slackmessage(f"""
+                        Loading phase calibration results to Antenna `{self.ants}`
+                        and zeroing phase calibration values in all other antenna...
+                        """,severity="INFO")
                         for ant, feng in self.ant_feng_map.items():
                             for stream in range(self.nof_streams):
                                 #Check if ant is one of the ones we computed phases for:
@@ -318,7 +376,9 @@ class CalibrationGainCollector():
                                             full_residual_phase_map[ant][stream,:].tolist()
                                         )
                                     except:
-                                        logger.error(f"Could not write out phase calibrations to the antenna: {ant}")
+                                        self.log_and_post_slackmessage(f"""
+                                        Could not write out phase calibrations to the antenna: {ant}"""
+                                        ,severity="ERROR")
                                 #Zero the rest:
                                 else:
                                     try:
@@ -327,11 +387,25 @@ class CalibrationGainCollector():
                                             [0.0]*1024
                                         )
                                     except:
-                                        logger.error(f"Could not write out zeros to the antenna: {ant}")
+                                        self.log_and_post_slackmessage(f"""
+                                        Could not zero-out phase calibrations of antenna: {ant}"""
+                                        ,severity="WARNING")
+                    
+                    else:
+                        self.log_and_post_slackmessage(f"""
+                            Calibration process was run with argument no-phase-cal = {self.no_phase_cal}. 
+                            Fixed delays will be updated with delay residuals but phase calibration values will not be written to FPGA's.
+                        """, severity = "INFO")
 
                     # update fixed_delays
-                    fixed_delays = pd.read_csv(os.path.abspath(self.fixed_csv), names = ["IF0","IF1","IF2","IF3"],
+                    try:
+                        fixed_delays = pd.read_csv(os.path.abspath(self.fixed_csv), names = ["IF0","IF1","IF2","IF3"],
                                 header=None, skiprows=1)
+                    except:
+                        self.log_and_post_slackmessage(f"""
+                            Could not read fixed delays from {self.fixed_csv} for updating with calculated residuals.
+                            Clearning up and aborting calibration process.
+                        """, severity = "ERROR")
                     fixed_delays = fixed_delays.to_dict()
                     updated_fixed_delays = {}
                     for i, tune in enumerate(list(fixed_delays.keys())):
@@ -350,7 +424,11 @@ class CalibrationGainCollector():
                     else:
                         modified_fixed_delays_path = "/home/cosmic/dev/logs/calibration_logs/"+os.path.basename(self.fixed_csv).split('.')[0]+"%"+filestem+".csv" 
                     
-                    logger.info(f"Wrote out modified fixed delays to: {modified_fixed_delays_path}")
+                    self.log_and_post_slackmessage(f"""
+                        Wrote out modified fixed delays to: 
+                        ```{modified_fixed_delays_path}```
+                        Updating fixed-delays on all antenna now...""", severity = "INFO")
+
                     df = pd.DataFrame.from_dict(updated_fixed_delays)
                     df.to_csv(modified_fixed_delays_path)
 
@@ -360,11 +438,25 @@ class CalibrationGainCollector():
 
                     #Overwrite the csv path to the new csv path for modification in the next run
                     self.fixed_csv = modified_fixed_delays_path
+                
+                else:
+                    self.log_and_post_slackmessage("""
+                        Calibration process is running in dry-mode. 
+                        Fixed delays are not updated with delay residuals and 
+                        phase calibration values are not written to FPGA's.
+                    """, severity = "INFO")
 
                 #Sleep
-                logger.info(f"Sleeping for {self.re_arm_time}s. Will not detect any channel triggers during this time.")
+                self.log_and_post_slackmessage(f"""
+                    Done!
+
+                    Sleeping for {self.re_arm_time}s. 
+                    Will not detect any channel triggers during this time.
+                    """, severity = "INFO")
                 time.sleep(self.re_arm_time)
-                logger.info(f"Clearing redis hash: {GPU_PHASES_REDIS_HASH} contents in anticipation of next calibration run.")
+                self.log_and_post_slackmessage(f"""
+                    Clearing redis hash: {GPU_PHASES_REDIS_HASH} contents in anticipation of next calibration run.
+                    """,severity = "DEBUG")
                 redis_clear_hash_contents(self.redis_obj, GPU_PHASES_REDIS_HASH)
             
 
@@ -386,7 +478,18 @@ if __name__ == "__main__":
     csv file path to latest fixed delays that must be modified by the residual delays calculated in this script.""")
     args = parser.parse_args()
 
+    slackbot = None
+    if "SLACK_BOT_TOKEN" in os.environ:
+        slackbot = SlackBot(os.environ["SLACK_BOT_TOKEN"], chan_name="active_vla_calibrations", chan_id="C04KTCX4MNV")
+    
+    topic = f"*Logging the VLA calibration in the loop*"
+    slackbot.set_topic(topic)
+    slackbot.post_message(f"""
+    Starting calibration observation process with starting fixed-delays:
+    {args.fixed_delay_to_update}""")
+
+
     calibrationGainCollector = CalibrationGainCollector(redis_obj, fixed_csv = args.fixed_delay_to_update, 
                                 hash_timeout = args.hash_timeout, dry_run = args.dry_run, no_phase_cal = args.no_phase_cal,
-                                re_arm_time = args.re_arm_time)
+                                re_arm_time = args.re_arm_time, slackbot = slackbot)
     calibrationGainCollector.start()
