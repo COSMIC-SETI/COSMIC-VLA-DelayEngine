@@ -237,7 +237,7 @@ class CalibrationGainCollector():
             log_message += f"""\n
             Calculating phase and delay residuals for tuning 1 off frequencies: 
             {collected_frequencies[1][0]}Hz->{collected_frequencies[1][-1]}Hz\n
-            while total observation frequencies for tuning 0 are: 
+            while total observation frequencies for tuning 1 are: 
             {full_observation_channel_frequencies[1,0]}Hz->{full_observation_channel_frequencies[1,-1]}Hz"""
         except IndexError:
             log_message += f"""\n
@@ -335,7 +335,7 @@ class CalibrationGainCollector():
                 #Save residual delays
                 delay_filename = os.path.join("/home/cosmic/dev/logs/calibration_logs/",f"calibrationdelayresiduals_{filestem}.json")
                 self.log_and_post_slackmessage(f"""
-                    Wrote out calculated residual delays to: 
+                    Wrote out calculated *residual delays* to: 
                     {delay_filename}""", severity = "DEBUG")
                 with open(delay_filename, 'w') as f:
                     json.dump(t_delay_dict, f)
@@ -344,7 +344,7 @@ class CalibrationGainCollector():
                 pretty_print_json = pprint.pformat(json.dumps(t_delay_dict)).replace("'", '"')
                 self.log_and_post_slackmessage(f"""
                     Calculated the following delay residuals from UVH5 recording
-                    {filestem}:
+                    *{filestem}*:
 
                     ```{pretty_print_json}```
                     """, severity = "INFO")
@@ -352,7 +352,7 @@ class CalibrationGainCollector():
                 #Save residual phases
                 phase_filename = os.path.join("/home/cosmic/dev/logs/calibration_logs/",f"calibrationphaseresiduals_{filestem}.json")
                 self.log_and_post_slackmessage(f"""
-                    Wrote out calculated residual phases to: 
+                    Wrote out calculated *residual phases* to: 
                     {phase_filename}""", severity = "DEBUG")
                 with open(phase_filename, 'w') as f:
                     json.dump(t_phase_dict, f)
@@ -377,7 +377,7 @@ class CalibrationGainCollector():
                                         )
                                     except:
                                         self.log_and_post_slackmessage(f"""
-                                        Could not write out phase calibrations to the antenna: {ant}"""
+                                        Could *not* write out phase calibrations to the antenna: {ant}"""
                                         ,severity="ERROR")
                                 #Zero the rest:
                                 else:
@@ -388,13 +388,13 @@ class CalibrationGainCollector():
                                         )
                                     except:
                                         self.log_and_post_slackmessage(f"""
-                                        Could not zero-out phase calibrations of antenna: {ant}"""
+                                        Could *not* zero-out phase calibrations of antenna: {ant}"""
                                         ,severity="WARNING")
                     
                     else:
                         self.log_and_post_slackmessage(f"""
                             Calibration process was run with argument no-phase-cal = {self.no_phase_cal}. 
-                            Fixed delays will be updated with delay residuals but phase calibration values will not be written to FPGA's.
+                            Fixed delays *will* be updated with delay residuals but phase calibration values *will not* be written to FPGA's.
                         """, severity = "INFO")
 
                     # update fixed_delays
@@ -403,9 +403,14 @@ class CalibrationGainCollector():
                                 header=None, skiprows=1)
                     except:
                         self.log_and_post_slackmessage(f"""
-                            Could not read fixed delays from {self.fixed_csv} for updating with calculated residuals.
-                            Clearning up and aborting calibration process.
+                            Could *not* read fixed delays from {self.fixed_csv} for updating with calculated residuals.
+                            Clearning up and aborting calibration process...
                         """, severity = "ERROR")
+                    self.log_and_post_slackmessage(f"""
+                    Modifying fixed-delays found in
+                    {self.fixed_csv}
+                    with the *residual delays* calculated above.
+                    """)
                     fixed_delays = fixed_delays.to_dict()
                     updated_fixed_delays = {}
                     for i, tune in enumerate(list(fixed_delays.keys())):
@@ -427,7 +432,7 @@ class CalibrationGainCollector():
                     self.log_and_post_slackmessage(f"""
                         Wrote out modified fixed delays to: 
                         ```{modified_fixed_delays_path}```
-                        Updating fixed-delays on all antenna now...""", severity = "INFO")
+                        Updating fixed-delays on *all* antenna now...""", severity = "INFO")
 
                     df = pd.DataFrame.from_dict(updated_fixed_delays)
                     df.to_csv(modified_fixed_delays_path)
@@ -441,9 +446,9 @@ class CalibrationGainCollector():
                 
                 else:
                     self.log_and_post_slackmessage("""
-                        Calibration process is running in dry-mode. 
-                        Fixed delays are not updated with delay residuals and 
-                        phase calibration values are not written to FPGA's.
+                        Calibration process is running in *dry-mode*. 
+                        Fixed delays are *not* updated with delay residuals and 
+                        phase calibration values are *not* written to FPGA's.
                     """, severity = "INFO")
 
                 #Sleep
