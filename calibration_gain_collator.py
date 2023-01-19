@@ -65,6 +65,13 @@ class CalibrationGainCollector():
 
         return tuning_index, start_freq
 
+    @staticmethod
+    def dictnpy_to_dictlist(dictnpy):
+        dictlst = {}
+        for key in dictnpy:
+            dictlst[key] = dictnpy[key].tolist()
+        return dictlst
+
     def log_and_post_slackmessage(self, message, severity = "INFO"):
         if severity =="INFO":
             logger.info(message)
@@ -299,7 +306,7 @@ class CalibrationGainCollector():
                 except:
                     self.log_and_post_slackmessage("Could not collect present VLA mcast metadata. Ignoring trigger...", severity = "ERROR")
                     continue
-                #FOR SPOOFING:
+                # #FOR SPOOFING:
                 # self.basebands = [
                 #     "AC_8BIT",
                 #     "BD_8BIT"
@@ -326,7 +333,14 @@ class CalibrationGainCollector():
                 ant_tune_to_collected_gains, collected_frequencies, self.ants, filestem = self.collect_phases_for_hash_timeout(self.hash_timeout) 
 
                 #calculate residual delays/phases for the collected frequencies
-                delay_residual_map, phase_residual_map,amp_map = self.calc_residual_delays_and_phases(ant_tune_to_collected_gains, collected_frequencies)
+                delay_residual_map, phase_residual_map, amp_map = self.calc_residual_delays_and_phases(ant_tune_to_collected_gains, collected_frequencies)
+
+                self.log_and_post_slackmessage(f"""
+                Phases collected from the GPU nodes for uvh5 stem:
+                `{filestem}`
+                have mean amplitudes per <ant_tuning> of:
+                ``{pprint.pformat(json.dumps(self.dictnpy_to_dictlist(amp_map))).replace("'", '"')}```
+                """,severity="INFO")
 
                 full_observation_channel_frequencies_hz = np.vstack((
                     np.arange(fcent_hz[0] - (self.nof_channels//2)*channel_bw,
@@ -341,11 +355,8 @@ class CalibrationGainCollector():
                 )
 
                 #For json dumping:
-                t_delay_dict = {}
-                t_phase_dict = {}
-                for ant, val in full_residual_phase_map.items():
-                    t_delay_dict[ant] = full_residual_delay_map[ant].tolist() 
-                    t_phase_dict[ant] = val.tolist() 
+                t_delay_dict = self.dictnpy_to_dictlist(full_residual_delay_map)
+                t_phase_dict = self.dictnpy_to_dictlist(full_residual_phase_map)
 
                 #Save residual delays
                 delay_filename = os.path.join("/home/cosmic/dev/logs/calibration_logs/",f"calibrationdelayresiduals_{filestem}.json")
@@ -359,7 +370,7 @@ class CalibrationGainCollector():
                 pretty_print_json = pprint.pformat(json.dumps(t_delay_dict)).replace("'", '"')
                 self.log_and_post_slackmessage(f"""
                     Calculated the following delay residuals from UVH5 recording
-                    *{filestem}*:
+                    `{filestem}`:
 
                     ```{pretty_print_json}```
                     """, severity = "INFO")
