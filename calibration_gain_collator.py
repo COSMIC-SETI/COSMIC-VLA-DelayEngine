@@ -37,6 +37,9 @@ logger.addHandler(ch)
 logger.addHandler(fh)
 
 GPU_PHASES_REDIS_HASH = "GPU_calibrationPhases"
+GPU_GAINS_REDIS_HASH = "GPU_calibrationGains"
+GPU_PHASES_REDIS_CHANNEL = "gpu_calibrationphases"
+GPU_GAINS_REDIS_CHANNEL = "gpu_calibrationgains"
 
 class CalibrationGainCollector():
     def __init__(self, redis_obj, fixed_csv, hash_timeout=20, re_arm_time = 30, dry_run = False, no_phase_cal = False,
@@ -81,11 +84,11 @@ class CalibrationGainCollector():
     def await_trigger(self):
         pubsub = self.redis_obj.pubsub(ignore_subscribe_messages=True)
         try:
-            pubsub.subscribe("gpu_calibrationphases")
+            pubsub.subscribe(GPU_GAINS_REDIS_CHANNEL)
         except redis.RedisError:
-            self.log_and_post_slackmessage("""
-                Unable to subscribe to gpu_calibrationphases 
-                channel to listen for changes to GPU_calibrationPhases.""",
+            self.log_and_post_slackmessage(f"""
+                Unable to subscribe to {GPU_GAINS_REDIS_CHANNEL} 
+                channel to listen for changes to {GPU_GAINS_REDIS_HASH}.""",
             severity="ERROR")
             return False
         self.log_and_post_slackmessage("Calibration process is armed and awaiting triggers from GPU nodes.", severity="INFO")
@@ -103,32 +106,33 @@ class CalibrationGainCollector():
 
     def collect_phases_for_hash_timeout(self, time_to_wait_until):
         """
-        This function waits till time_to_wait expires, then collects GPU_calibrationPhases,
+        This function waits till time_to_wait expires, then collects GPU_calibrationGains,
         and processes hash contents.
 
         Args:
             time_to_wait_until : float, Unix time for the loop to wait until.
         Returns:
-            - {<ant>_<tune_index> : [phases], ...}
+            - {<ant>_<tune_index> : [[complex(gains_pol0)], [complex(gains_pol1)]], ...}
             - collected frequency dict of {tune: [n_collected_freqs], ...}
             - list[antnames in observation]
+            - filestem of uvh5 file used for received gains
         """
         time.sleep(time_to_wait_until)
 
         filestem = None
 
-        calibration_phases = redis_hget_keyvalues(self.redis_obj, GPU_PHASES_REDIS_HASH)
+        calibration_gains = redis_hget_keyvalues(self.redis_obj, GPU_GAINS_REDIS_HASH)
 
         #Which antenna have been provided - assume unchanging given timeout expired
-        ants = list(calibration_phases[list(calibration_phases.keys())[0]].keys())
-        ants.remove('filestem')
+        ants = list(calibration_gains[list(calibration_gains.keys())[0]]['gains'].keys())
+
         #Initialise some empty dicts and arrays for population during this process
         collected_frequencies = {0:[],1:[]}
-        ant_tune_to_collected_phase = {}
+        ant_tune_to_collected_gain = {}
         for ant,tuning_idx in itertools.product(ants, range(self.nof_tunings)):
-            ant_tune_to_collected_phase[ant+f"_{tuning_idx}"] = [[],[]]
+            ant_tune_to_collected_gain[ant+f"_{tuning_idx}"] = [[],[]]
 
-        for start_freq_tune, payload in calibration_phases.items():
+        for start_freq_tune, payload in calibration_gains.items():
             tune_idx, start_freq = self.get_tuningidx_and_start_freq(start_freq_tune)
             self.log_and_post_slackmessage(f"Processing tuning {tune_idx}, start freq {start_freq}...", severity="DEBUG")
             filestem_t = payload['filestem']
@@ -141,23 +145,29 @@ class CalibrationGainCollector():
                 del payload['filestem']
                 filestem = filestem_t
             
-            for ant, phase_dict in payload.items():
+            for ant, gain_dict in payload['gains'].items():
                 key = ant+"_"+str(tune_idx)
-                ant_tune_to_collected_phase[key][0] += phase_dict['pol0_phases'] 
-                ant_tune_to_collected_phase[key][1] += phase_dict['pol1_phases']
-                
-                if not any(f in collected_frequencies[tune_idx] for f in phase_dict['freq_array']):
-                    collected_frequencies[tune_idx] += phase_dict['freq_array']    
-        
-        return ant_tune_to_collected_phase, collected_frequencies, ants, filestem
 
-    def calc_residual_delays_and_phases(self, ant_tune_to_collected_phase, collected_frequencies):
+                ant_tune_to_collected_gain[key][0] += [
+                    complex(gain_dict["gain_pol0_real"][j], gain_dict["gain_pol0_imag"][j]) 
+                    for j in range(len(gain_dict["gain_pol0_real"]))
+                ]
+                ant_tune_to_collected_gain[key][1] += [
+                    complex(gain_dict["gain_pol1_real"][j], gain_dict["gain_pol1_imag"][j]) 
+                    for j in range(len(gain_dict["gain_pol1_real"]))
+                ]
+
+            collected_frequencies[tune_idx] += payload['freqs_hz'] 
+        
+        return ant_tune_to_collected_gain, collected_frequencies, ants, filestem
+
+    def calc_residual_delays_and_phases(self, ant_tune_to_collected_gains, collected_frequencies):
         """
         Taking all the concatenated phases and frequencies, use a fit of values to determine
         the residual delays and phases.
 
         Args: 
-            ant_tune_to_collected_phase : {<ant>_<tune_index> : [phases], ...}
+            ant_tune_to_collected_gains : {<ant>_<tune_index> : [[complex(gains_pol0)], [complex(gains_pol1)]], ...}
             collected frequency dict of {tune: [n_collected_freqs], ...}
 
         Return:
@@ -166,17 +176,20 @@ class CalibrationGainCollector():
         """
         delay_residual_map = {}
         phase_residual_map = {} 
+        amp_map = {} 
 
-        for ant_tune, phase_matrix in ant_tune_to_collected_phase.items():
+        for ant_tune, gain_matrix in ant_tune_to_collected_gains.items():
             tune = ant_tune.split('_')[1]
             tune = int(tune)
             residual_delays = np.zeros(self.nof_pols)
             residual_phases = np.zeros((self.nof_pols,len(collected_frequencies[tune])))
             
-            #If there are values present in the phase matrix:
-            if any(phase_matrix):
-                phase_matrix = np.array(phase_matrix)
+            #If there are values present in the gain matrix:
+            if any(gain_matrix):
+                gain_matrix = np.array(gain_matrix,dtype=np.complex64)
                 t_col_frequencies = np.array(collected_frequencies[tune],dtype = float)
+
+                phase_matrix = np.angle(gain_matrix)
 
                 for pol in range(self.nof_pols):
                     unwrapped_phases = np.unwrap(phase_matrix[pol,:])
@@ -185,10 +198,12 @@ class CalibrationGainCollector():
                     residual_delays[pol] = phase_slope / (2*np.pi)
                     residual_phases[pol,:] = residual % (2*np.pi)
 
+                amp_map[ant_tune] = np.mean(np.abs(gain_matrix),axis=1)
+
             delay_residual_map[ant_tune] = residual_delays
             phase_residual_map[ant_tune] = residual_phases
 
-        return delay_residual_map, phase_residual_map
+        return delay_residual_map, phase_residual_map, amp_map
 
     def correctly_place_residual_phases_and_delays(self, residual_phases, residual_delays, 
         collected_frequencies, full_observation_channel_frequencies):
@@ -308,10 +323,10 @@ class CalibrationGainCollector():
                     tbin = {tbin}""", severity = "INFO")
 
                 #Start function that waits for hash_timeout before collecting redis hash.
-                ant_tune_to_collected_phase, collected_frequencies, self.ants, filestem = self.collect_phases_for_hash_timeout(self.hash_timeout) 
+                ant_tune_to_collected_gains, collected_frequencies, self.ants, filestem = self.collect_phases_for_hash_timeout(self.hash_timeout) 
 
                 #calculate residual delays/phases for the collected frequencies
-                delay_residual_map, phase_residual_map = self.calc_residual_delays_and_phases(ant_tune_to_collected_phase, collected_frequencies)
+                delay_residual_map, phase_residual_map,amp_map = self.calc_residual_delays_and_phases(ant_tune_to_collected_gains, collected_frequencies)
 
                 full_observation_channel_frequencies_hz = np.vstack((
                     np.arange(fcent_hz[0] - (self.nof_channels//2)*channel_bw,
@@ -460,9 +475,9 @@ class CalibrationGainCollector():
                     """, severity = "INFO")
                 time.sleep(self.re_arm_time)
                 self.log_and_post_slackmessage(f"""
-                    Clearing redis hash: {GPU_PHASES_REDIS_HASH} contents in anticipation of next calibration run.
+                    Clearing redis hash: {GPU_GAINS_REDIS_HASH} contents in anticipation of next calibration run.
                     """,severity = "DEBUG")
-                redis_clear_hash_contents(self.redis_obj, GPU_PHASES_REDIS_HASH)
+                redis_clear_hash_contents(self.redis_obj, GPU_GAINS_REDIS_HASH)
             
 
 if __name__ == "__main__":
