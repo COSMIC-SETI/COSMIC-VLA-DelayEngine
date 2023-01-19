@@ -450,10 +450,10 @@ class CalibrationGainCollector():
 
                     #bit of logic here to remove the previous filestem from the name.
                     if '%' in self.fixed_csv:
-                        modified_fixed_delays_path = "/home/cosmic/dev/logs/calibration_logs/"+os.path.basename(self.fixed_csv).split('.')[0].split('%')[1]+"%"+filestem+".csv"                    
+                        modified_fixed_delays_path = "/home/cosmic/dev/logs/calibration_logs/"+os.path.splitext(os.path.basename(self.fixed_csv))[0].split('%')[1]+"%"+filestem+".csv"                    
                     #if first time running
                     else:
-                        modified_fixed_delays_path = "/home/cosmic/dev/logs/calibration_logs/"+os.path.basename(self.fixed_csv).split('.')[0]+"%"+filestem+".csv" 
+                        modified_fixed_delays_path = "/home/cosmic/dev/logs/calibration_logs/"+os.path.splitext(os.path.basename(self.fixed_csv))[0]+"%"+filestem+".csv" 
                     
                     self.log_and_post_slackmessage(f"""
                         Wrote out modified fixed delays to: 
