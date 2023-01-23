@@ -19,7 +19,7 @@ from plot_delay_phase import plot_delay_phase
 LOGFILENAME = "/home/cosmic/logs/DelayCalibration.log"
 CALIBRATION_LOG_DIR = "/home/cosmic/dev/logs/calibration_logs/"
 logger = logging.getLogger('calibration_delays')
-logger.setLevel(logging.INFO)
+logger.setLevel(logging.DEBUG)
 
 SERVICE_NAME = os.path.splitext(os.path.basename(__file__))[0]
 
@@ -60,14 +60,15 @@ class CalibrationGainCollector():
         self.nof_tunings = nof_tunings
         self.nof_pols = nof_pols
         self.ant_feng_map = ant_remotefeng_map.get_antennaFengineDict(self.redis_obj)
-        self.init_antenna_phascals(0.0, ants = None)
-        #Publish the initial fixed delays and trigger the F-Engines to load them
-        self.log_and_post_slackmessage(f"""
-        Publishing initial fixed-delays in:
-        `{self.fixed_csv}`
-        to F-Engines.""", severity="INFO")
-        self.delay_calibration = DelayCalibrationWriter(self.redis_obj, self.fixed_csv)
-        self.delay_calibration.run()
+        if not self.dry_run:
+            self.init_antenna_phascals(0.0, ants = None)
+            #Publish the initial fixed delays and trigger the F-Engines to load them
+            self.log_and_post_slackmessage(f"""
+            Publishing initial fixed-delays in:
+            `{self.fixed_csv}`
+            to F-Engines.""", severity="INFO")
+            self.delay_calibration = DelayCalibrationWriter(self.redis_obj, self.fixed_csv)
+            self.delay_calibration.run()
     
     def get_tuningidx_and_start_freq(self, message_key):
         key_split = message_key.split(',')
@@ -171,14 +172,13 @@ class CalibrationGainCollector():
         for start_freq_tune, payload in calibration_gains.items():
             tune_idx, start_freq = self.get_tuningidx_and_start_freq(start_freq_tune)
             self.log_and_post_slackmessage(f"Processing tuning {tune_idx}, start freq {start_freq}...", severity="DEBUG")
-            filestem_t = payload['filestem']
+            filestem_t = os.path.splitext(payload['filestem'])[0]
             if filestem is not None and filestem_t != filestem:
                 self.log_and_post_slackmessage(f"""
                     Skipping {start_freq_tune} payload since it contains differing filestem {filestem_t}
                     to previously encountered filestem {filestem}.""", severity="WARNING")
                 continue
             else:
-                del payload['filestem']
                 filestem = filestem_t
             
             for ant, gain_dict in payload['gains'].items():
@@ -274,6 +274,8 @@ class CalibrationGainCollector():
             #find sorted frequency indices
             frequency_indices[tuning] = full_observation_channel_frequencies[tuning,:].searchsorted(collected_frequencies[tuning])
         
+        print(len(collected_frequencies[0]))
+        print(len(collected_frequencies[1]))
         log_message = """-------------------------------------------------------------"""
         try:
             log_message += f"""\n
@@ -326,7 +328,7 @@ class CalibrationGainCollector():
             if trigger:
                 self.log_and_post_slackmessage(f"""
                     Calibration process has been triggered.\n
-                    Dry run = {self.dry_run}, applying phase calibrations = {self.no_phase_cal},
+                    Dry run = {self.dry_run}, applying phase calibrations = {not self.no_phase_cal},
                     hash timeout = {self.hash_timeout}s and re-arm time = {self.re_arm_time}s""", severity = "INFO")
 
                 #Fetch and calculate needed metadata
@@ -337,20 +339,20 @@ class CalibrationGainCollector():
                     self.log_and_post_slackmessage("Could not collect present VLA mcast metadata. Ignoring trigger...", severity = "ERROR")
                     continue
                 # #FOR SPOOFING:
-                # self.basebands = [
-                #     "AC_8BIT",
-                #     "BD_8BIT"
-                #     ]
-                # fcent_mhz = [
-                # 6670.0,
-                # 6675.0
-                # ]
-                # tbin = 1e-6
+                self.basebands = [
+                    "AC_8BIT",
+                    "BD_8BIT"
+                    ]
+                fcent_mhz = [
+                3000.0,
+                3005.0
+                ]
+                tbin = 1e-6
 
-                self.basebands = metadata.get('baseband')
-                fcent_mhz = np.array(metadata['fcents'],dtype=float)
+                # self.basebands = metadata.get('baseband')
+                # fcent_mhz = np.array(metadata['fcents'],dtype=float)
                 fcent_hz = np.array(fcent_mhz)*1e6
-                tbin = float(metadata['tbin'])
+                # tbin = float(metadata['tbin'])
                 channel_bw = 1/tbin
                 
                 self.log_and_post_slackmessage(f"""
@@ -477,7 +479,7 @@ class CalibrationGainCollector():
 
                     #bit of logic here to remove the previous filestem from the name.
                     if '%' in self.fixed_csv:
-                        modified_fixed_delays_path =+os.path.splitext(os.path.basename(self.fixed_csv))[0].split('%')[1]+"%"+filestem+".csv"                    
+                        modified_fixed_delays_path = os.path.splitext(os.path.basename(self.fixed_csv))[0].split('%')[1]+"%"+filestem+".csv"                    
                     #if first time running
                     else:
                         modified_fixed_delays_path = os.path.join(CALIBRATION_LOG_DIR+os.path.splitext(os.path.basename(self.fixed_csv))[0]+"%"+filestem+".csv" )
