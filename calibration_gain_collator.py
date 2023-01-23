@@ -13,11 +13,15 @@ from textwrap import dedent
 import pprint
 from cosmic.observations.slackbot import SlackBot
 from cosmic.fengines import ant_remotefeng_map
-from cosmic.redis_actions import redis_obj, redis_hget_keyvalues, redis_publish_dict_to_hash, redis_clear_hash_contents
+from cosmic.redis_actions import redis_obj, redis_hget_keyvalues, redis_publish_dict_to_hash, redis_clear_hash_contents, redis_publish_service_pulse
+from plot_delay_phase import plot_delay_phase
 
 LOGFILENAME = "/home/cosmic/logs/DelayCalibration.log"
+CALIBRATION_LOG_DIR = "/home/cosmic/dev/logs/calibration_logs/"
 logger = logging.getLogger('calibration_delays')
 logger.setLevel(logging.INFO)
+
+SERVICE_NAME = os.path.splitext(os.path.basename(__file__))[0]
 
 # create console handler and set level to debug
 ch = logging.StreamHandler()
@@ -56,6 +60,14 @@ class CalibrationGainCollector():
         self.nof_tunings = nof_tunings
         self.nof_pols = nof_pols
         self.ant_feng_map = ant_remotefeng_map.get_antennaFengineDict(self.redis_obj)
+        self.init_antenna_phascals(0.0, ants = None)
+        #Publish the initial fixed delays and trigger the F-Engines to load them
+        self.log_and_post_slackmessage(f"""
+        Publishing initial fixed-delays in:
+        `{self.fixed_csv}`
+        to F-Engines.""", severity="INFO")
+        self.delay_calibration = DelayCalibrationWriter(self.redis_obj, self.fixed_csv)
+        self.delay_calibration.run()
     
     def get_tuningidx_and_start_freq(self, message_key):
         key_split = message_key.split(',')
@@ -65,6 +77,23 @@ class CalibrationGainCollector():
 
         return tuning_index, start_freq
 
+    def init_antenna_phascals(self, init_val, ants = None):
+        if ants is not None:
+            ants = ants
+        else:
+            ants = list(self.ant_feng_map.keys())
+        
+        self.log_and_post_slackmessage(f"""
+        Initialising phasecalibration values to {init_val} on antenna:
+        {ants}\n""", severity="DEBUG")
+        for ant in ants:
+            feng = self.ant_feng_map[ant]
+            for stream in range(self.nof_streams):
+                feng.phaserotate.set_phase_cal(
+                                            stream,
+                                            [init_val]*1024
+                                        ) 
+    
     @staticmethod
     def dictnpy_to_dictlist(dictnpy):
         dictlst = {}
@@ -249,18 +278,18 @@ class CalibrationGainCollector():
         try:
             log_message += f"""\n
             Calculating phase and delay residuals for tuning 0 off frequencies: 
-            {collected_frequencies[0][0]}Hz->{collected_frequencies[0][-1]}Hz\n
+            `{collected_frequencies[0][0]}Hz->{collected_frequencies[0][-1]}Hz`\n
             while total observation frequencies for tuning 0 are: 
-            {full_observation_channel_frequencies[0,0]}->{full_observation_channel_frequencies[0,-1]}Hz"""
+            `{full_observation_channel_frequencies[0,0]}->{full_observation_channel_frequencies[0,-1]}Hz`"""
         except IndexError:
             log_message += f"""\n
             No values received for tuning 0, and so no residuals will be calculated for that tuning."""
         try:
             log_message += f"""\n
             Calculating phase and delay residuals for tuning 1 off frequencies: 
-            {collected_frequencies[1][0]}Hz->{collected_frequencies[1][-1]}Hz\n
+            `{collected_frequencies[1][0]}Hz->{collected_frequencies[1][-1]}Hz`\n
             while total observation frequencies for tuning 1 are: 
-            {full_observation_channel_frequencies[1,0]}Hz->{full_observation_channel_frequencies[1,-1]}Hz"""
+            `{full_observation_channel_frequencies[1,0]}Hz->{full_observation_channel_frequencies[1,-1]}Hz`"""
         except IndexError:
             log_message += f"""\n
             No values received for tuning 1, and so no residuals will be calculated for that tuning."""
@@ -291,6 +320,7 @@ class CalibrationGainCollector():
 
     def start(self):
         while True:
+            redis_publish_service_pulse(self.redis_obj, SERVICE_NAME)
             #Launch function that waits for first valid message:
             trigger = self.await_trigger()
             if trigger:
@@ -312,9 +342,9 @@ class CalibrationGainCollector():
                 #     "BD_8BIT"
                 #     ]
                 # fcent_mhz = [
-                #     2477.0,
-                #     3501.0
-                #     ]
+                # 6670.0,
+                # 6675.0
+                # ]
                 # tbin = 1e-6
 
                 self.basebands = metadata.get('baseband')
@@ -325,9 +355,9 @@ class CalibrationGainCollector():
                 
                 self.log_and_post_slackmessage(f"""
                     Observation meta reports:
-                    basebands = {self.basebands}
-                    fcents = {fcent_mhz} MHz
-                    tbin = {tbin}""", severity = "INFO")
+                    `basebands = {self.basebands}`
+                    `fcents = {fcent_mhz} MHz`
+                    `tbin = {tbin}`""", severity = "INFO")
 
                 #Start function that waits for hash_timeout before collecting redis hash.
                 ant_tune_to_collected_gains, collected_frequencies, self.ants, filestem = self.collect_phases_for_hash_timeout(self.hash_timeout) 
@@ -339,7 +369,7 @@ class CalibrationGainCollector():
                 Phases collected from the GPU nodes for uvh5 stem:
                 `{filestem}`
                 have mean amplitudes per <ant_tuning> of:
-                ``{pprint.pformat(json.dumps(self.dictnpy_to_dictlist(amp_map))).replace("'", '"')}```
+                ```{pprint.pformat(json.dumps(self.dictnpy_to_dictlist(amp_map))).replace("'", '"')}```
                 """,severity="INFO")
 
                 full_observation_channel_frequencies_hz = np.vstack((
@@ -359,7 +389,7 @@ class CalibrationGainCollector():
                 t_phase_dict = self.dictnpy_to_dictlist(full_residual_phase_map)
 
                 #Save residual delays
-                delay_filename = os.path.join("/home/cosmic/dev/logs/calibration_logs/",f"calibrationdelayresiduals_{filestem}.json")
+                delay_filename = os.path.join(CALIBRATION_LOG_DIR,f"calibrationdelayresiduals_{filestem}.json")
                 self.log_and_post_slackmessage(f"""
                     Wrote out calculated *residual delays* to: 
                     {delay_filename}""", severity = "DEBUG")
@@ -376,7 +406,7 @@ class CalibrationGainCollector():
                     """, severity = "INFO")
 
                 #Save residual phases
-                phase_filename = os.path.join("/home/cosmic/dev/logs/calibration_logs/",f"calibrationphaseresiduals_{filestem}.json")
+                phase_filename = os.path.join(CALIBRATION_LOG_DIR,f"calibrationphaseresiduals_{filestem}.json")
                 self.log_and_post_slackmessage(f"""
                     Wrote out calculated *residual phases* to: 
                     {phase_filename}""", severity = "DEBUG")
@@ -393,9 +423,9 @@ class CalibrationGainCollector():
                         and zeroing phase calibration values in all other antenna...
                         """,severity="INFO")
                         for ant, feng in self.ant_feng_map.items():
-                            for stream in range(self.nof_streams):
-                                #Check if ant is one of the ones we computed phases for:
-                                if ant in full_residual_phase_map:
+                            #Check if ant is one of the ones we computed phases for:
+                            if ant in full_residual_phase_map:
+                                for stream in range(self.nof_streams):
                                     try:
                                         feng.phaserotate.set_phase_cal(
                                             stream,   
@@ -405,17 +435,14 @@ class CalibrationGainCollector():
                                         self.log_and_post_slackmessage(f"""
                                         Could *not* write out phase calibrations to the antenna: {ant}"""
                                         ,severity="ERROR")
-                                #Zero the rest:
-                                else:
-                                    try:
-                                        feng.phaserotate.set_phase_cal(
-                                            stream,
-                                            [0.0]*1024
-                                        )
-                                    except:
-                                        self.log_and_post_slackmessage(f"""
-                                        Could *not* zero-out phase calibrations of antenna: {ant}"""
-                                        ,severity="WARNING")
+                            #Zero the if not:
+                            else:
+                                try:
+                                    self.init_antenna_phascals(0.0,ants = [ant])
+                                except:
+                                    self.log_and_post_slackmessage(f"""
+                                    Could *not* zero-out phase calibrations of antenna: {ant}"""
+                                    ,severity="WARNING")
                     
                     else:
                         self.log_and_post_slackmessage(f"""
@@ -434,7 +461,7 @@ class CalibrationGainCollector():
                         """, severity = "ERROR")
                     self.log_and_post_slackmessage(f"""
                     Modifying fixed-delays found in
-                    {self.fixed_csv}
+                    ```{self.fixed_csv}```
                     with the *residual delays* calculated above.
                     """)
                     fixed_delays = fixed_delays.to_dict()
@@ -450,10 +477,10 @@ class CalibrationGainCollector():
 
                     #bit of logic here to remove the previous filestem from the name.
                     if '%' in self.fixed_csv:
-                        modified_fixed_delays_path = "/home/cosmic/dev/logs/calibration_logs/"+os.path.splitext(os.path.basename(self.fixed_csv))[0].split('%')[1]+"%"+filestem+".csv"                    
+                        modified_fixed_delays_path =+os.path.splitext(os.path.basename(self.fixed_csv))[0].split('%')[1]+"%"+filestem+".csv"                    
                     #if first time running
                     else:
-                        modified_fixed_delays_path = "/home/cosmic/dev/logs/calibration_logs/"+os.path.splitext(os.path.basename(self.fixed_csv))[0]+"%"+filestem+".csv" 
+                        modified_fixed_delays_path = os.path.join(CALIBRATION_LOG_DIR+os.path.splitext(os.path.basename(self.fixed_csv))[0]+"%"+filestem+".csv" )
                     
                     self.log_and_post_slackmessage(f"""
                         Wrote out modified fixed delays to: 
@@ -463,9 +490,9 @@ class CalibrationGainCollector():
                     df = pd.DataFrame.from_dict(updated_fixed_delays)
                     df.to_csv(modified_fixed_delays_path)
 
-                    #Publish the new fixed delays and trigger the F-Engines to load them
-                    delay_calibration = DelayCalibrationWriter(self.redis_obj, modified_fixed_delays_path)
-                    delay_calibration.run()
+                    #Publish new fixed delays to FEngines:
+                    self.delay_calibration.calib_csv = modified_fixed_delays_path
+                    self.delay_calibration.run()
 
                     #Overwrite the csv path to the new csv path for modification in the next run
                     self.fixed_csv = modified_fixed_delays_path
@@ -476,6 +503,21 @@ class CalibrationGainCollector():
                         Fixed delays are *not* updated with delay residuals and 
                         phase calibration values are *not* written to FPGA's.
                     """, severity = "INFO")
+
+                #Generate plots and save/publish them:
+
+                delay_file_path, phase_file_path = plot_delay_phase(full_residual_delay_map,full_residual_phase_map, 
+                full_observation_channel_frequencies_hz,outdir = CALIBRATION_LOG_DIR, outfilestem=filestem)
+
+                self.log_and_post_slackmessage(f"""
+                        Saved  residual delay plot to: 
+                        `{delay_file_path}`
+                        and residual phase plot to:
+                        `{phase_file_path}`
+                        """, severity = "DEBUG")
+
+                slackbot.upload_file(delay_file_path, title =f"Residual delays per antenna calculated from\n`{filestem}`")
+                slackbot.upload_file(phase_file_path, title =f"Residual phases per frequency calculated from\n`{filestem}`")
 
                 #Sleep
                 self.log_and_post_slackmessage(f"""

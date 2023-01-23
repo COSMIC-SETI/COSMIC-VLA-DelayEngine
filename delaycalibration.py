@@ -18,9 +18,9 @@ class DelayCalibrationWriter():
         to the redis hash META_calibrationDelays.
         """
         self.redis_obj = redis_obj
-
+        self.calib_csv = calib_csv
         #initialise calibration delay data dictionary
-        self.ant2calibmap_init = pd.read_csv(os.path.abspath(calib_csv), names = ["IF0","IF1","IF2","IF3"], header=None, skiprows=1).to_dict('index')
+        self.ant2calibmap_init = pd.read_csv(os.path.abspath(self.calib_csv), names = ["IF0","IF1","IF2","IF3"], header=None, skiprows=1).to_dict('index')
         self.ant2calibmap = {}
 
     def run(self):
