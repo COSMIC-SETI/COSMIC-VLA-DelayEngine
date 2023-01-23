@@ -50,6 +50,7 @@ def plot_delay_phase(residual_delays_dict, residual_phase_dict, frequency_matrix
     
     #converting the delay to ns
     delay_dat *= 1e+9
+    phase_dat *= (180.0/np.pi)
     
     #plotting the residual delays vs antennas
     fig, ax = plt.subplots(constrained_layout=True, figsize = (10,6))
