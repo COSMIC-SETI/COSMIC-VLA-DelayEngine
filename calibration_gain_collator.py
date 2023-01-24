@@ -207,8 +207,8 @@ class CalibrationGainCollector():
             collected frequency dict of {tune: [n_collected_freqs], ...}
 
         Return:
-            delay_residual_map : {<ant>_<tune_index> : [[residual_delay_pol0],[residual_delay_pol1]]}, ...}
-            phase_residual_map : {<ant>_<tune_index> : [[residual_phase_pol0],[residual_phase_pol1]]}, ...}
+            delay_residual_map : {<ant>_<tune_index> : [[residual_delay_pol0],[residual_delay_pol1]]}, ...} in nanoseconds
+            phase_residual_map : {<ant>_<tune_index> : [[residual_phase_pol0],[residual_phase_pol1]]}, ...} in radians
         """
         delay_residual_map = {}
         phase_residual_map = {} 
@@ -231,7 +231,7 @@ class CalibrationGainCollector():
                     unwrapped_phases = np.unwrap(phase_matrix[pol,:])
                     phase_slope, _ = np.polyfit(t_col_frequencies, unwrapped_phases, 1)
                     residual = unwrapped_phases - (phase_slope * t_col_frequencies)
-                    residual_delays[pol] = phase_slope / (2*np.pi)
+                    residual_delays[pol] = (phase_slope / (2*np.pi)) * 1e9
                     residual_phases[pol,:] = residual % (2*np.pi)
 
                 amp_map[ant_tune] = np.mean(np.abs(gain_matrix),axis=1)
@@ -255,8 +255,8 @@ class CalibrationGainCollector():
             full_observation_channel_frequencies_hz: a matrix of dims(nof_tunings, nof_channels)
 
         Returns:
-            full_residual_phase_map : a dictionary mapping of {ant: [nof_streams, nof_frequencies]} 
-            full_residual_delay_map : a dictionary mapping of {ant: [nof_streams, 1]} 
+            full_residual_phase_map : a dictionary mapping of {ant: [nof_streams, nof_frequencies]} in radians
+            full_residual_delay_map : a dictionary mapping of {ant: [nof_streams, 1]} in nanoseconds
         """
         full_residual_phase_map = {}
         full_residual_delay_map = {}
@@ -472,14 +472,14 @@ class CalibrationGainCollector():
                         sub_updated_fixed_delays = {}
                         for ant, delay in fixed_delays[tune].items():
                             if ant in full_residual_delay_map:
-                                sub_updated_fixed_delays[ant] = delay + float(-1e9 * full_residual_delay_map[ant][i])
+                                sub_updated_fixed_delays[ant] = delay + full_residual_delay_map[ant][i]
                             else:
                                 sub_updated_fixed_delays[ant] = delay
                         updated_fixed_delays[tune] = sub_updated_fixed_delays
 
                     #bit of logic here to remove the previous filestem from the name.
                     if '%' in self.fixed_csv:
-                        modified_fixed_delays_path = os.path.splitext(os.path.basename(self.fixed_csv))[0].split('%')[1]+"%"+filestem+".csv"                    
+                        modified_fixed_delays_path = os.path.join(CALIBRATION_LOG_DIR+os.path.splitext(os.path.basename(self.fixed_csv))[0].split('%')[1]+"%"+filestem+".csv")                    
                     #if first time running
                     else:
                         modified_fixed_delays_path = os.path.join(CALIBRATION_LOG_DIR+os.path.splitext(os.path.basename(self.fixed_csv))[0]+"%"+filestem+".csv" )
@@ -518,8 +518,8 @@ class CalibrationGainCollector():
                         `{phase_file_path}`
                         """, severity = "DEBUG")
 
-                slackbot.upload_file(delay_file_path, title =f"Residual delays per antenna calculated from\n`{filestem}`")
-                slackbot.upload_file(phase_file_path, title =f"Residual phases per frequency calculated from\n`{filestem}`")
+                slackbot.upload_file(delay_file_path, title =f"Residual delays (ns) per antenna calculated from\n`{filestem}`")
+                slackbot.upload_file(phase_file_path, title =f"Residual phases (degrees) per frequency (Hz) calculated from\n`{filestem}`")
 
                 #Sleep
                 self.log_and_post_slackmessage(f"""
