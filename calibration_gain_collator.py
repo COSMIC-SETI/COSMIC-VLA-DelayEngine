@@ -274,8 +274,6 @@ class CalibrationGainCollector():
             #find sorted frequency indices
             frequency_indices[tuning] = full_observation_channel_frequencies[tuning,:].searchsorted(collected_frequencies[tuning])
         
-        print(len(collected_frequencies[0]))
-        print(len(collected_frequencies[1]))
         log_message = """-------------------------------------------------------------"""
         try:
             log_message += f"""\n
