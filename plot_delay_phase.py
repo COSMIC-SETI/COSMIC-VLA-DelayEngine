@@ -48,6 +48,8 @@ def plot_delay_phase(residual_delays_dict, residual_phase_dict, frequency_matrix
         delay_dat[i,:] = residual_delays_dict[ant]
         phase_dat[i,...] = residual_phase_dict[ant]
     
+    #wrap phases:
+    phase_dat = (phase_dat + np.pi)%(2*np.pi) - np.pi
     #converting the phase to degrees
     phase_dat *= (180.0/np.pi)
     
