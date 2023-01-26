@@ -89,11 +89,17 @@ class CalibrationGainCollector():
         {ants}\n""", severity="DEBUG")
         for ant in ants:
             feng = self.ant_feng_map[ant]
-            for stream in range(self.nof_streams):
-                feng.phaserotate.set_phase_cal(
-                                            stream,
-                                            [init_val]*1024
-                                        ) 
+            try:
+                for stream in range(self.nof_streams):
+                    feng.phaserotate.set_phase_cal(
+                                                stream,
+                                                [init_val]*1024
+                                            ) 
+            except:
+                self.log_and_post_slackmessage(f"""
+                        Could *not* write out phase calibrations to the antenna: {ant}"""
+                        ,severity="ERROR")
+                continue
     
     @staticmethod
     def dictnpy_to_dictlist(dictnpy):
@@ -440,12 +446,7 @@ class CalibrationGainCollector():
                                         ,severity="ERROR")
                             #Zero the if not:
                             else:
-                                try:
-                                    self.init_antenna_phascals(0.0,ants = [ant])
-                                except:
-                                    self.log_and_post_slackmessage(f"""
-                                    Could *not* zero-out phase calibrations of antenna: {ant}"""
-                                    ,severity="WARNING")
+                                self.init_antenna_phascals(0.0,ants = [ant])
                     
                     else:
                         self.log_and_post_slackmessage(f"""
