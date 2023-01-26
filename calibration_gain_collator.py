@@ -105,16 +105,19 @@ class CalibrationGainCollector():
     def log_and_post_slackmessage(self, message, severity = "INFO"):
         if severity =="INFO":
             logger.info(message)
-            self.slackbot.post_message(dedent("\
-                INFO:\n" + message))
+            if self.slackbot is not None:
+                self.slackbot.post_message(dedent("\
+                    INFO:\n" + message))
         if severity =="WARN":
             logger.warn(message)
-            self.slackbot.post_message(dedent("\
-                WARNING:\n" + message))
+            if self.slackbot is not None:
+                self.slackbot.post_message(dedent("\
+                    WARNING:\n" + message))
         if severity =="ERROR":
             logger.error(message)
-            self.slackbot.post_message(dedent("\
-                ERROR:\n" + message))
+            if self.slackbot is not None:
+                self.slackbot.post_message(dedent("\
+                    ERROR:\n" + message))
         if severity == "DEBUG":
             logger.debug(message)
 
@@ -152,11 +155,11 @@ class CalibrationGainCollector():
             - {<ant>_<tune_index> : [[complex(gains_pol0)], [complex(gains_pol1)]], ...}
             - collected frequency dict of {tune: [n_collected_freqs], ...}
             - list[antnames in observation]
-            - filestem of uvh5 file used for received gains
+            - obs_id of observation used for received gains
         """
         time.sleep(time_to_wait_until)
 
-        filestem = None
+        obs_id = None
 
         calibration_gains = redis_hget_keyvalues(self.redis_obj, GPU_GAINS_REDIS_HASH)
 
@@ -172,14 +175,14 @@ class CalibrationGainCollector():
         for start_freq_tune, payload in calibration_gains.items():
             tune_idx, start_freq = self.get_tuningidx_and_start_freq(start_freq_tune)
             self.log_and_post_slackmessage(f"Processing tuning {tune_idx}, start freq {start_freq}...", severity="DEBUG")
-            filestem_t = os.path.splitext(payload['filestem'])[0]
-            if filestem is not None and filestem_t != filestem:
+            obs_id_t = payload['obs_id']
+            if obs_id is not None and obs_id_t != obs_id:
                 self.log_and_post_slackmessage(f"""
-                    Skipping {start_freq_tune} payload since it contains differing filestem {filestem_t}
-                    to previously encountered filestem {filestem}.""", severity="WARNING")
+                    Skipping {start_freq_tune} payload since it contains differing obs_id {obs_id_t}
+                    to previously encountered obs_id {obs_id}.""", severity="WARNING")
                 continue
             else:
-                filestem = filestem_t
+                obs_id = obs_id_t
             
             for ant, gain_dict in payload['gains'].items():
                 key = ant+"_"+str(tune_idx)
@@ -195,7 +198,7 @@ class CalibrationGainCollector():
 
             collected_frequencies[tune_idx] += payload['freqs_hz'] 
         
-        return ant_tune_to_collected_gain, collected_frequencies, ants, filestem
+        return ant_tune_to_collected_gain, collected_frequencies, ants, obs_id
 
     def calc_residual_delays_and_phases(self, ant_tune_to_collected_gains, collected_frequencies):
         """
@@ -360,14 +363,14 @@ class CalibrationGainCollector():
                     `tbin = {tbin}`""", severity = "INFO")
 
                 #Start function that waits for hash_timeout before collecting redis hash.
-                ant_tune_to_collected_gains, collected_frequencies, self.ants, filestem = self.collect_phases_for_hash_timeout(self.hash_timeout) 
+                ant_tune_to_collected_gains, collected_frequencies, self.ants, obs_id = self.collect_phases_for_hash_timeout(self.hash_timeout) 
 
                 #calculate residual delays/phases for the collected frequencies
                 delay_residual_map, phase_residual_map, amp_map = self.calc_residual_delays_and_phases(ant_tune_to_collected_gains, collected_frequencies)
 
                 self.log_and_post_slackmessage(f"""
-                Phases collected from the GPU nodes for uvh5 stem:
-                `{filestem}`
+                Phases collected from the GPU nodes for observation:
+                `{obs_id}`
                 have mean amplitudes per <ant_tuning> of:
                 ```{pprint.pformat(json.dumps(self.dictnpy_to_dictlist(amp_map))).replace("'", '"')}```
                 """,severity="INFO")
@@ -389,7 +392,7 @@ class CalibrationGainCollector():
                 t_phase_dict = self.dictnpy_to_dictlist(full_residual_phase_map)
 
                 #Save residual delays
-                delay_filename = os.path.join(CALIBRATION_LOG_DIR,f"calibrationdelayresiduals_{filestem}.json")
+                delay_filename = os.path.join(CALIBRATION_LOG_DIR,f"calibrationdelayresiduals_{obs_id}.json")
                 self.log_and_post_slackmessage(f"""
                     Wrote out calculated *residual delays* to: 
                     {delay_filename}""", severity = "DEBUG")
@@ -400,13 +403,13 @@ class CalibrationGainCollector():
                 pretty_print_json = pprint.pformat(json.dumps(t_delay_dict)).replace("'", '"')
                 self.log_and_post_slackmessage(f"""
                     Calculated the following delay residuals from UVH5 recording
-                    `{filestem}`:
+                    `{obs_id}`:
 
                     ```{pretty_print_json}```
                     """, severity = "INFO")
 
                 #Save residual phases
-                phase_filename = os.path.join(CALIBRATION_LOG_DIR,f"calibrationphaseresiduals_{filestem}.json")
+                phase_filename = os.path.join(CALIBRATION_LOG_DIR,f"calibrationphaseresiduals_{obs_id}.json")
                 self.log_and_post_slackmessage(f"""
                     Wrote out calculated *residual phases* to: 
                     {phase_filename}""", severity = "DEBUG")
@@ -477,10 +480,10 @@ class CalibrationGainCollector():
 
                     #bit of logic here to remove the previous filestem from the name.
                     if '%' in self.fixed_csv:
-                        modified_fixed_delays_path = os.path.join(CALIBRATION_LOG_DIR+os.path.splitext(os.path.basename(self.fixed_csv))[0].split('%')[1]+"%"+filestem+".csv")                    
+                        modified_fixed_delays_path = os.path.join(CALIBRATION_LOG_DIR+os.path.splitext(os.path.basename(self.fixed_csv))[0].split('%')[1]+"%"+obs_id+".csv")                    
                     #if first time running
                     else:
-                        modified_fixed_delays_path = os.path.join(CALIBRATION_LOG_DIR+os.path.splitext(os.path.basename(self.fixed_csv))[0]+"%"+filestem+".csv" )
+                        modified_fixed_delays_path = os.path.join(CALIBRATION_LOG_DIR+os.path.splitext(os.path.basename(self.fixed_csv))[0]+"%"+obs_id+".csv" )
                     
                     self.log_and_post_slackmessage(f"""
                         Wrote out modified fixed delays to: 
@@ -507,7 +510,7 @@ class CalibrationGainCollector():
                 #Generate plots and save/publish them:
 
                 delay_file_path, phase_file_path = plot_delay_phase(full_residual_delay_map,full_residual_phase_map, 
-                full_observation_channel_frequencies_hz,outdir = CALIBRATION_LOG_DIR, outfilestem=filestem)
+                full_observation_channel_frequencies_hz,outdir = CALIBRATION_LOG_DIR, outfilestem=obs_id)
 
                 self.log_and_post_slackmessage(f"""
                         Saved  residual delay plot to: 
@@ -516,8 +519,9 @@ class CalibrationGainCollector():
                         `{phase_file_path}`
                         """, severity = "DEBUG")
 
-                slackbot.upload_file(delay_file_path, title =f"Residual delays (ns) per antenna calculated from\n`{filestem}`")
-                slackbot.upload_file(phase_file_path, title =f"Residual phases (degrees) per frequency (Hz) calculated from\n`{filestem}`")
+                if self.slackbot is not None:
+                    self.slackbot.upload_file(delay_file_path, title =f"Residual delays (ns) per antenna calculated from\n`{obs_id}`")
+                    self.slackbot.upload_file(phase_file_path, title =f"Residual phases (degrees) per frequency (Hz) calculated from\n`{obs_id}`")
 
                 #Sleep
                 self.log_and_post_slackmessage(f"""
@@ -549,17 +553,19 @@ if __name__ == "__main__":
     phase calibrations are applied.""")
     parser.add_argument("-f","--fixed-delay-to-update", type=str, required=True, help="""
     csv file path to latest fixed delays that must be modified by the residual delays calculated in this script.""")
+    parser.add_argument("--no-slack-post", action="store_true",help="""If specified, logs are not posted to slack.""")
     args = parser.parse_args()
 
     slackbot = None
-    if "SLACK_BOT_TOKEN" in os.environ:
-        slackbot = SlackBot(os.environ["SLACK_BOT_TOKEN"], chan_name="active_vla_calibrations", chan_id="C04KTCX4MNV")
-    
-    topic = f"*Logging the VLA calibration in the loop*"
-    slackbot.set_topic(topic)
-    slackbot.post_message(f"""
-    Starting calibration observation process with starting fixed-delays:
-    {args.fixed_delay_to_update}""")
+    if not args.no_slack_post:
+        if "SLACK_BOT_TOKEN" in os.environ:
+            slackbot = SlackBot(os.environ["SLACK_BOT_TOKEN"], chan_name="active_vla_calibrations", chan_id="C04KTCX4MNV")
+        
+        topic = f"*Logging the VLA calibration in the loop*"
+        slackbot.set_topic(topic)
+        slackbot.post_message(f"""
+        Starting calibration observation process with starting fixed-delays:
+        {args.fixed_delay_to_update}""")
 
 
     calibrationGainCollector = CalibrationGainCollector(redis_obj, fixed_csv = args.fixed_delay_to_update, 
