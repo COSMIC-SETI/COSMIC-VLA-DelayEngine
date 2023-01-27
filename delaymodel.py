@@ -86,7 +86,8 @@ class DelayModel(threading.Thread):
             "effective_lo_1_mhz":None,
             "sideband_0":None,
             "sideband_1":None,
-            "time_value":None
+            "time_value":None,
+            "time_to_load":None
             }
         
         #thread for calculating delays
@@ -247,6 +248,9 @@ class DelayModel(threading.Thread):
                 self.publish_delays()
             else:
                 return pd.DataFrame(self.delay_data, index=list(self.itrf.index.values)).to_dict('index')
+
+            #sleep for at least 2 seconds
+            time.sleep(2)
 
     def publish_delays(self):
         """
