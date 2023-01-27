@@ -19,15 +19,15 @@ class DelayCalibrationWriter():
         """
         self.redis_obj = redis_obj
         self.calib_csv = calib_csv
-        #initialise calibration delay data dictionary
-        self.ant2calibmap_init = pd.read_csv(os.path.abspath(self.calib_csv), names = ["IF0","IF1","IF2","IF3"], header=None, skiprows=1).to_dict('index')
-        self.ant2calibmap = {}
 
     def run(self):
         """
         This function will take the calibration delay values in conjunction with ADVANCE_TIME
         and publish them to redis hash META_calibrationDelays.
         """
+        #read in calibration delay data dictionary
+        self.ant2calibmap_init = pd.read_csv(os.path.abspath(self.calib_csv), names = ["IF0","IF1","IF2","IF3"], header=None, skiprows=1).to_dict('index')
+        self.ant2calibmap = {}
         for ant, calib_value in self.ant2calibmap_init.items():
             values = np.fromiter(calib_value.values(),dtype=float)
             values = values + (ADVANCE_TIME* 1e9)
