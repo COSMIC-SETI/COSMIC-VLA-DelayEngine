@@ -48,7 +48,7 @@ ITRF_Z_OFFSET = 3554875.9
 ITRF_CENTER = [ITRF_X_OFFSET, ITRF_Y_OFFSET, ITRF_Z_OFFSET]
 
 class DelayModel(threading.Thread):
-    def __init__(self, redis_obj):
+    def __init__(self, redis_obj, min_loadtime_offset = 3, max_loadtime_offset = 10):
         """
         A delay calculation object.
         Makes use of observation metadata and the vla antenna positions
@@ -61,10 +61,11 @@ class DelayModel(threading.Thread):
         threading.Thread.__init__(self)
 
         self.redis_obj = redis_obj
+        self.min_loadtime_offset = min_loadtime_offset
+        self.max_loadtime_offset = max_loadtime_offset
 
         #intialise source pointings dictionary
         self.source_points_lock = threading.Lock()
-        self.source_pointing_update = threading.Event()
         self.source_pointings_dict = {}
 
         #initialise the antenna positions
@@ -94,7 +95,7 @@ class DelayModel(threading.Thread):
             "sideband_0":None,
             "sideband_1":None,
             "time_value":None,
-            "time_to_load":None
+            "loadtime":None
             }
         
         #thread for calculating delays
@@ -168,21 +169,22 @@ class DelayModel(threading.Thread):
         dec = obs_meta.get('dec_deg')
         sslo = obs_meta.get('sslo')
         sideband = obs_meta.get('sideband')
-        loadtime = obs_meta.get('loadtime')
-        source = SkyCoord(ra, dec, unit='deg')
+        try:
+            loadtime = obs_meta.get('loadtime')
+        except:
+            loadtime = None
+            logger.info("No loadtime present in the observation metadata provided.")
         logger.info(f"Collected ra {ra}, dec {dec}, sslo {sslo} and sideband {sideband} from obs_meta.")
 
         #Update source dictionary with newly collected source
         with self.source_points_lock:
-            self.source_pointings_dict[loadtime] = {
+            self.source_pointings_dict = {
                 'ra'        : ra,
                 'dec'       : dec,
-                'src'       : source,
                 'sslo'      : sslo,
-                'sideband'  : sideband
+                'sideband'  : sideband,
+                'loadtime'  : loadtime
             }
-        #alert other processes that a new pointing has arrived
-        self.source_pointing_update.set()
 
     def redis_chan_listener(self):
         """This function listens for updates on the  "meta_antennaproperties"
@@ -229,64 +231,83 @@ class DelayModel(threading.Thread):
         """
         while True:
             redis_publish_service_pulse(self.redis_obj, SERVICE_NAME)
-            loadtimes_on_hand = list(self.self.source_pointings_dict.keys())
-            if self.source_pointing_update.is_set():
-                #A new pointing has just arrived. Its loadtime must be checked and if within the 
-                #threshold, delay coefficients must be calculated for it and sent to the F-Engines.
-                new_loadtimes = list(set(loadtimes_on_hand) ^ set(list(self.self.source_pointings_dict.keys())))
-                new_loadtimes_sub_threshold = [loadtime for loadtime in new_loadtimes if loadtime <= self.threshold and loadtime > 0]
 
+            t = time.time()
+            t_int = np.floor(t)
+            loadtime_from_now = self.source_pointings_dict['loadtime'] - t
 
-            else:    
-                t = np.floor(time.time())
-                tts = [3, (TIME_INTERPOLATION_LENGTH/2) + 3, TIME_INTERPOLATION_LENGTH + 3] # Interpolate time samples with 3s advance
-                tts = np.array(tts) + t
-                dt = TIME_INTERPOLATION_LENGTH/2
-                ts = Time(tts, format='unix')
+            if (loadtime_from_now < self.min_loadtime_offset
+                or 
+                loadtime_from_now > self.max_loadtime_offset):
+                #loadtime for source pointing is too far in the future or is in the past. Use current pointings on hand and set loadtime to 
+                #self.min_loadtime_offset from now.
+                loadtime = t_int + self.min_loadtime_offset
 
-                # perform coordinate transformation to uvw
-                uvw1 = compute_uvw(ts[0], self.source, self.itrf[['X','Y','Z']], ITRF_CENTER)
-                uvw2 = compute_uvw(ts[1], self.source, self.itrf[['X','Y','Z']], ITRF_CENTER)
-                uvw3 = compute_uvw(ts[2], self.source, self.itrf[['X','Y','Z']], ITRF_CENTER)
+            elif(loadtime_from_now >= self.min_loadtime_offset
+                and
+                loadtime_from_now <= self.max_loadtime_offset):
+                #loadtime is within threshold. Update source pointing and calculate coefficients and set loadtime to 
+                #loadtime.
+                self.source = SkyCoord(self.source_pointings_dict['ra'], self.source_pointings_dict['dec'], unit='deg')
+                loadtime = self.source_pointings_dict['loadtime']
+                sideband = self.source_pointings_dict['sideband']
+                sslo = self.source_pointings_dict['sslo']
 
-                # "w" coordinate represents the goemetric delay in light-meters
-                w1 = uvw1[...,2]
-                w2 = uvw2[...,2]
-                w3 = uvw3[...,2]
+            elif loadtime_from_now is None:
+                #loadtime is None. Update source pointing and calculate coefficients and set loadtime to 
+                #self.min_loadtime_offset from now.
+                self.source = SkyCoord(self.source_pointings_dict['ra'], self.source_pointings_dict['dec'], unit='deg')
+                loadtime = t_int + self.min_loadtime_offset
+                sideband = self.source_pointings_dict['sideband']
+                sslo = self.source_pointings_dict['sslo']
+            
+            else:
+                logger.error("Invalid loadtime provided")
 
-                # Calibration delays are added in the controller
-                delay1 = (w1/const.c.value)
-                delay2 = (w2/const.c.value)
-                delay3 = (w3/const.c.value)
+            tts = [3, (TIME_INTERPOLATION_LENGTH/2) + 3, TIME_INTERPOLATION_LENGTH + 3]
+            tts = np.array(tts) + t_int # Interpolate time samples with 3s advance
+            dt = TIME_INTERPOLATION_LENGTH/2
+            ts = Time(tts, format='unix')
 
-                # delay1 = -delay1
-                # delay2 = -delay2
-                # delay3 = -delay3
+            # perform coordinate transformation to uvw
+            uvw1 = compute_uvw(ts[0], self.source, self.itrf[['X','Y','Z']], ITRF_CENTER)
+            uvw2 = compute_uvw(ts[1], self.source, self.itrf[['X','Y','Z']], ITRF_CENTER)
+            uvw3 = compute_uvw(ts[2], self.source, self.itrf[['X','Y','Z']], ITRF_CENTER)
 
-                # Compute the delay rate in s/s
-                rate1 = (delay2 - delay1) / (dt)
-                rate2 = (delay3 - delay2) / (dt)
-                rate = (delay3 - delay1) / (2*dt)
+            # "w" coordinate represents the goemetric delay in light-meters
+            w1 = uvw1[...,2]
+            w2 = uvw2[...,2]
+            w3 = uvw3[...,2]
 
-                # Compute the delay rate rate in s/s^2
-                raterate = (rate2 - rate1) / (dt)
+            # Calibration delays are added in the controller
+            delay1 = (w1/const.c.value)
+            delay2 = (w2/const.c.value)
+            delay3 = (w3/const.c.value)
 
-                self.delay_data["delay_ns"] = (delay2*1e9).tolist()
-                self.delay_data["delay_rate_nsps"] = (rate*1e9).tolist()
-                self.delay_data["delay_raterate_nsps2"] = (raterate*1e9).tolist()
-                self.delay_data["effective_lo_0_mhz"] = self.lo_eff[0]
-                self.delay_data["effective_lo_1_mhz"] = self.lo_eff[1]
-                self.delay_data["sideband_0"] = self.sideband[0]
-                self.delay_data["sideband_1"] = self.sideband[1]
-                self.delay_data["time_value"] = tts[1]
+            # Compute the delay rate in s/s
+            rate1 = (delay2 - delay1) / (dt)
+            rate2 = (delay3 - delay2) / (dt)
+            rate = (delay3 - delay1) / (2*dt)
 
-                if publish:
-                    self.publish_delays()
-                else:
-                    return pd.DataFrame(self.delay_data, index=list(self.itrf.index.values)).to_dict('index')
+            # Compute the delay rate rate in s/s^2
+            raterate = (rate2 - rate1) / (dt)
 
-                #sleep for at least 2 seconds
-                time.sleep(2)
+            self.delay_data["delay_ns"] = (delay2*1e9).tolist()
+            self.delay_data["delay_rate_nsps"] = (rate*1e9).tolist()
+            self.delay_data["delay_raterate_nsps2"] = (raterate*1e9).tolist()
+            self.delay_data["effective_lo_0_mhz"] = sslo[0]
+            self.delay_data["effective_lo_1_mhz"] = sslo[1]
+            self.delay_data["sideband_0"] = sideband[0]
+            self.delay_data["sideband_1"] = sideband[1]
+            self.delay_data["time_value"] = tts[1]
+            self.delay_data["loadtime"] = loadtime
+
+            if publish:
+                self.publish_delays()
+            else:
+                return pd.DataFrame(self.delay_data, index=list(self.itrf.index.values)).to_dict('index')               
+
+            time.sleep(time.time() + self.max_loadtime_offset - t)
 
     def publish_delays(self):
         """
@@ -300,8 +321,8 @@ class DelayModel(threading.Thread):
             delays["lo_hz"] = configure.order_lo_dict_values(self.antname_lo_fshift_dict[ant])
             delay_dict[ant] = delays
             redis_publish_dict_to_channel(self.redis_obj, f"{ant}_delays", delays)
-        delay_dict['deg_ra'] = self.ra
-        delay_dict['deg_dec'] = self.dec
+        delay_dict['deg_ra'] = self.source.ra.deg
+        delay_dict['deg_dec'] = self.source.dec.deg
         redis_publish_dict_to_hash(self.redis_obj, "META_modelDelays", delay_dict)
 
 if __name__ == "__main__":
@@ -312,6 +333,14 @@ if __name__ == "__main__":
     parser.add_argument(
     "-c", "--clean", action="store_true",help="Delete the existing log file and start afresh.",
     )
+    parser.add_argument(
+    "--min-time-offset", type=float ,help="The lower time threshold (s) for the loadtime values received by the delay model",
+    required=False, default = 3
+    )
+    parser.add_argument(
+    "--max-time-offset", type=float ,help="The upper time threshold for the loadtime values received by the delay model",
+    required=False, default = 10
+    )
     args = parser.parse_args()
     if os.path.exists(LOGFILENAME) and args.clean:
         logger.info("Removing previous log file...")
@@ -319,5 +348,5 @@ if __name__ == "__main__":
         logger.info("Log file removed.")
     else:
         logger.info("Nothing to clean, continuing...")
-    delayModel = DelayModel(redis_obj)
+    delayModel = DelayModel(redis_obj, min_loadtime_offset = args.min_time_offset, max_loadtime_offset = args.max_time_offset)
     delayModel.run()
