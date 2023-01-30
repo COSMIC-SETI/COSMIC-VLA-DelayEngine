@@ -474,7 +474,7 @@ class CalibrationGainCollector():
                         sub_updated_fixed_delays = {}
                         for ant, delay in fixed_delays[tune].items():
                             if ant in full_residual_delay_map:
-                                sub_updated_fixed_delays[ant] = delay + full_residual_delay_map[ant][i]
+                                sub_updated_fixed_delays[ant] = delay - full_residual_delay_map[ant][i]
                             else:
                                 sub_updated_fixed_delays[ant] = delay
                         updated_fixed_delays[tune] = sub_updated_fixed_delays
@@ -511,7 +511,7 @@ class CalibrationGainCollector():
                 #Generate plots and save/publish them:
 
                 delay_file_path, phase_file_path = plot_delay_phase(full_residual_delay_map,full_residual_phase_map, 
-                full_observation_channel_frequencies_hz,outdir = CALIBRATION_LOG_DIR, outfilestem=obs_id)
+                        full_observation_channel_frequencies_hz,outdir = CALIBRATION_LOG_DIR, outfilestem=obs_id)
 
                 self.log_and_post_slackmessage(f"""
                         Saved  residual delay plot to: 
@@ -521,8 +521,11 @@ class CalibrationGainCollector():
                         """, severity = "DEBUG")
 
                 if self.slackbot is not None:
-                    self.slackbot.upload_file(delay_file_path, title =f"Residual delays (ns) per antenna calculated from\n`{obs_id}`")
-                    self.slackbot.upload_file(phase_file_path, title =f"Residual phases (degrees) per frequency (Hz) calculated from\n`{obs_id}`")
+                    try:
+                        self.slackbot.upload_file(delay_file_path, title =f"Residual delays (ns) per antenna calculated from\n`{obs_id}`")
+                        self.slackbot.upload_file(phase_file_path, title =f"Residual phases (degrees) per frequency (Hz) calculated from\n`{obs_id}`")
+                    except:
+                        self.log_and_post_slackmessage("Error uploading plots", severity="INFO")
 
                 #Sleep
                 self.log_and_post_slackmessage(f"""
