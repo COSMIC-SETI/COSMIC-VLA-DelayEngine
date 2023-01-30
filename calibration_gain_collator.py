@@ -13,7 +13,7 @@ from textwrap import dedent
 import pprint
 from cosmic.observations.slackbot import SlackBot
 from cosmic.fengines import ant_remotefeng_map
-from cosmic.redis_actions import redis_obj, redis_hget_keyvalues, redis_publish_dict_to_hash, redis_clear_hash_contents, redis_publish_service_pulse
+from cosmic.redis_actions import redis_obj, redis_hget_keyvalues, redis_publish_dict_to_hash, redis_clear_hash_contents, redis_publish_service_pulse,redis_publish_dict_to_channel
 from plot_delay_phase import plot_delay_phase
 
 LOGFILENAME = "/home/cosmic/logs/DelayCalibration.log"
@@ -46,10 +46,11 @@ GPU_PHASES_REDIS_CHANNEL = "gpu_calibrationphases"
 GPU_GAINS_REDIS_CHANNEL = "gpu_calibrationgains"
 
 class CalibrationGainCollector():
-    def __init__(self, redis_obj, fixed_csv, hash_timeout=20, re_arm_time = 30, dry_run = False, no_phase_cal = False,
+    def __init__(self, redis_obj, fixed_delay_csv, fixed_phase_json, hash_timeout=20, re_arm_time = 30, dry_run = False, no_phase_cal = False,
     nof_streams = 4, nof_tunings = 2, nof_pols = 2, nof_channels = 1024, slackbot=None):
         self.redis_obj = redis_obj
-        self.fixed_csv = fixed_csv
+        self.fixed_delay_csv = fixed_delay_csv
+        self.fixed_phase_json = fixed_phase_json
         self.hash_timeout = hash_timeout
         self.re_arm_time = re_arm_time
         self.dry_run = dry_run
@@ -61,14 +62,17 @@ class CalibrationGainCollector():
         self.nof_pols = nof_pols
         self.ant_feng_map = ant_remotefeng_map.get_antennaFengineDict(self.redis_obj)
         if not self.dry_run:
-            self.init_antenna_phascals(0.0, ants = None)
             #Publish the initial fixed delays and trigger the F-Engines to load them
             self.log_and_post_slackmessage(f"""
-            Publishing initial fixed-delays in:
-            `{self.fixed_csv}`
+            Publishing initial fixed-delays in
+            `{self.fixed_delay_csv}`
+            and fixed-phases in 
+            `{self.fixed_phase_json}`
             to F-Engines.""", severity="INFO")
-            self.delay_calibration = DelayCalibrationWriter(self.redis_obj, self.fixed_csv)
+            self.delay_calibration = DelayCalibrationWriter(self.redis_obj, self.fixed_delay_csv)
             self.delay_calibration.run()
+            with open(self.fixed_phase_json, 'r') as f:
+                self.update_antenna_phascals(json.load(f))
     
     def get_tuningidx_and_start_freq(self, message_key):
         key_split = message_key.split(',')
@@ -78,28 +82,9 @@ class CalibrationGainCollector():
 
         return tuning_index, start_freq
 
-    def init_antenna_phascals(self, init_val, ants = None):
-        if ants is not None:
-            ants = ants
-        else:
-            ants = list(self.ant_feng_map.keys())
-        
-        self.log_and_post_slackmessage(f"""
-        Initialising phasecalibration values to {init_val} on antenna:
-        {ants}\n""", severity="DEBUG")
-        for ant in ants:
-            feng = self.ant_feng_map[ant]
-            try:
-                for stream in range(self.nof_streams):
-                    feng.phaserotate.set_phase_cal(
-                                                stream,
-                                                [init_val]*1024
-                                            ) 
-            except:
-                self.log_and_post_slackmessage(f"""
-                        Could *not* write out phase calibrations to the antenna: {ant}"""
-                        ,severity="ERROR")
-                continue
+    def update_antenna_phascals(self, ant_to_phasemap):
+        redis_publish_dict_to_hash(self.redis_obj, "META_calibrationPhases",ant_to_phasemap)
+        redis_publish_dict_to_channel(self.redis_obj, "update_calibration_phases", True)
     
     @staticmethod
     def dictnpy_to_dictlist(dictnpy):
@@ -345,21 +330,21 @@ class CalibrationGainCollector():
                 except:
                     self.log_and_post_slackmessage("Could not collect present VLA mcast metadata. Ignoring trigger...", severity = "ERROR")
                     continue
-                # #FOR SPOOFING:
-                # self.basebands = [
-                #     "AC_8BIT",
-                #     "BD_8BIT"
-                #     ]
-                # fcent_mhz = [
-                # 3000.0,
-                # 3005.0
-                # ]
-                # tbin = 1e-6
+                #FOR SPOOFING:
+                self.basebands = [
+                    "AC_8BIT",
+                    "BD_8BIT"
+                    ]
+                fcent_mhz = [
+                    3148.0,
+                    3148.0
+                ]
+                tbin = 1e-6
 
-                self.basebands = metadata.get('baseband')
-                fcent_mhz = np.array(metadata['fcents'],dtype=float)
+                # self.basebands = metadata.get('baseband')
+                # fcent_mhz = np.array(metadata['fcents'],dtype=float)
                 fcent_hz = np.array(fcent_mhz)*1e6
-                tbin = float(metadata['tbin'])
+                # tbin = float(metadata['tbin'])
                 channel_bw = 1/tbin
                 
                 self.log_and_post_slackmessage(f"""
@@ -425,29 +410,47 @@ class CalibrationGainCollector():
                 
                 #In the event of a wet run, we want to update fixed delays as well as load phase calibrations to the F-Engines
                 if not self.dry_run:
-                    #load phases to F-Engines
+                     # update phases
                     if not self.no_phase_cal:
+                        try:
+                            with open(self.fixed_phase_json, 'r') as f:
+                                fixed_phases = json.load(f)
+                        except:
+                            self.log_and_post_slackmessage(f"""
+                                Could *not* read fixed phases from {self.fixed_phase_json} for updating with calculated residuals.
+                                Clearning up and aborting calibration process...
+                            """, severity = "ERROR")
                         self.log_and_post_slackmessage(f"""
-                        Loading phase calibration results to Antenna `{self.ants}`
-                        and zeroing phase calibration values in all other antenna...
-                        """,severity="INFO")
-                        for ant, feng in self.ant_feng_map.items():
-                            #Check if ant is one of the ones we computed phases for:
+                        Modifying fixed-phases found in
+                        ```{self.fixed_phase_json}```
+                        with the *residual phases* calculated.
+                        """)
+                        updated_fixed_phases = {}
+                        for ant, phases in fixed_phases.items():
                             if ant in full_residual_phase_map:
-                                for stream in range(self.nof_streams):
-                                    try:
-                                        feng.phaserotate.set_phase_cal(
-                                            stream,   
-                                            full_residual_phase_map[ant][stream,:].tolist()
-                                        )
-                                    except:
-                                        self.log_and_post_slackmessage(f"""
-                                        Could *not* write out phase calibrations to the antenna: {ant}"""
-                                        ,severity="ERROR")
-                            #Zero the if not:
+                                updated_fixed_phases[ant] = (np.array(phases,dtype=float) - full_residual_phase_map[ant]).tolist()
                             else:
-                                self.init_antenna_phascals(0.0,ants = [ant])
-                    
+                                updated_fixed_phases[ant] = phases
+
+                        #bit of logic here to remove the previous filestem from the name.
+                        if '%' in self.fixed_phase_json:
+                            modified_fixed_phases_path = os.path.join(CALIBRATION_LOG_DIR+os.path.splitext(os.path.basename(self.fixed_phase_json))[0].split('%')[1]+"%"+obs_id+".json")                    
+                        #if first time running
+                        else:
+                            modified_fixed_phases_path = os.path.join(CALIBRATION_LOG_DIR+os.path.splitext(os.path.basename(self.fixed_phase_json))[0]+"%"+obs_id+".json" )
+
+                        self.log_and_post_slackmessage(f"""
+                        Wrote out modified fixed phases to: 
+                        ```{modified_fixed_phases_path}```
+                        Updating fixed-phases on *all* antenna now...""", severity = "INFO")
+
+                        self.update_antenna_phascals(updated_fixed_phases)
+                        with open(modified_fixed_phases_path, 'w+') as f:
+                            json.dump(updated_fixed_phases, f)
+
+                        #Overwrite the json path to the new json path for modification in the next run
+                        self.fixed_phase_json = modified_fixed_phases_path
+
                     else:
                         self.log_and_post_slackmessage(f"""
                             Calibration process was run with argument no-phase-cal = {self.no_phase_cal}. 
@@ -456,16 +459,16 @@ class CalibrationGainCollector():
 
                     # update fixed_delays
                     try:
-                        fixed_delays = pd.read_csv(os.path.abspath(self.fixed_csv), names = ["IF0","IF1","IF2","IF3"],
+                        fixed_delays = pd.read_csv(os.path.abspath(self.fixed_delay_csv), names = ["IF0","IF1","IF2","IF3"],
                                 header=None, skiprows=1)
                     except:
                         self.log_and_post_slackmessage(f"""
-                            Could *not* read fixed delays from {self.fixed_csv} for updating with calculated residuals.
+                            Could *not* read fixed delays from {self.fixed_delay_csv} for updating with calculated residuals.
                             Clearning up and aborting calibration process...
                         """, severity = "ERROR")
                     self.log_and_post_slackmessage(f"""
                     Modifying fixed-delays found in
-                    ```{self.fixed_csv}```
+                    ```{self.fixed_delay_csv}```
                     with the *residual delays* calculated above.
                     """)
                     fixed_delays = fixed_delays.to_dict()
@@ -480,11 +483,11 @@ class CalibrationGainCollector():
                         updated_fixed_delays[tune] = sub_updated_fixed_delays
 
                     #bit of logic here to remove the previous filestem from the name.
-                    if '%' in self.fixed_csv:
-                        modified_fixed_delays_path = os.path.join(CALIBRATION_LOG_DIR+os.path.splitext(os.path.basename(self.fixed_csv))[0].split('%')[1]+"%"+obs_id+".csv")                    
+                    if '%' in self.fixed_delay_csv:
+                        modified_fixed_delays_path = os.path.join(CALIBRATION_LOG_DIR+os.path.splitext(os.path.basename(self.fixed_delay_csv))[0].split('%')[1]+"%"+obs_id+".csv")                    
                     #if first time running
                     else:
-                        modified_fixed_delays_path = os.path.join(CALIBRATION_LOG_DIR+os.path.splitext(os.path.basename(self.fixed_csv))[0]+"%"+obs_id+".csv" )
+                        modified_fixed_delays_path = os.path.join(CALIBRATION_LOG_DIR+os.path.splitext(os.path.basename(self.fixed_delay_csv))[0]+"%"+obs_id+".csv" )
                     
                     self.log_and_post_slackmessage(f"""
                         Wrote out modified fixed delays to: 
@@ -499,7 +502,7 @@ class CalibrationGainCollector():
                     self.delay_calibration.run()
 
                     #Overwrite the csv path to the new csv path for modification in the next run
-                    self.fixed_csv = modified_fixed_delays_path
+                    self.fixed_delay_csv = modified_fixed_delays_path
                 
                 else:
                     self.log_and_post_slackmessage("""
@@ -557,6 +560,8 @@ if __name__ == "__main__":
     phase calibrations are applied.""")
     parser.add_argument("-f","--fixed-delay-to-update", type=str, required=True, help="""
     csv file path to latest fixed delays that must be modified by the residual delays calculated in this script.""")
+    parser.add_argument("-p","--fixed-phase-to-update", type=str, required=True, help="""
+    json file path to latest fixed phases that must be modified by the residual phases calculated in this script.""")
     parser.add_argument("--no-slack-post", action="store_true",help="""If specified, logs are not posted to slack.""")
     args = parser.parse_args()
 
@@ -572,7 +577,7 @@ if __name__ == "__main__":
         {args.fixed_delay_to_update}""")
 
 
-    calibrationGainCollector = CalibrationGainCollector(redis_obj, fixed_csv = args.fixed_delay_to_update, 
+    calibrationGainCollector = CalibrationGainCollector(redis_obj, fixed_delay_csv = args.fixed_delay_to_update, fixed_phase_json = args.fixed_phase_to_update,
                                 hash_timeout = args.hash_timeout, dry_run = args.dry_run, no_phase_cal = args.no_phase_cal,
                                 re_arm_time = args.re_arm_time, slackbot = slackbot)
     calibrationGainCollector.start()
