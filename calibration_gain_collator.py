@@ -331,20 +331,20 @@ class CalibrationGainCollector():
                     self.log_and_post_slackmessage("Could not collect present VLA mcast metadata. Ignoring trigger...", severity = "ERROR")
                     continue
                 #FOR SPOOFING:
-                self.basebands = [
-                    "AC_8BIT",
-                    "BD_8BIT"
-                    ]
-                fcent_mhz = [
-                    3148.0,
-                    3148.0
-                ]
-                tbin = 1e-6
+                # self.basebands = [
+                #     "AC_8BIT",
+                #     "BD_8BIT"
+                #     ]
+                # fcent_mhz = [
+                #     3148.0,
+                #     3148.0
+                # ]
+                # tbin = 1e-6
 
-                # self.basebands = metadata.get('baseband')
-                # fcent_mhz = np.array(metadata['fcents'],dtype=float)
+                self.basebands = metadata.get('baseband')
+                fcent_mhz = np.array(metadata['fcents'],dtype=float)
                 fcent_hz = np.array(fcent_mhz)*1e6
-                # tbin = float(metadata['tbin'])
+                tbin = float(metadata['tbin'])
                 channel_bw = 1/tbin
                 
                 self.log_and_post_slackmessage(f"""
