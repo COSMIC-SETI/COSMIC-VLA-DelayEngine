@@ -195,7 +195,7 @@ class DelayModel(threading.Thread):
         pubsub = self.redis_obj.pubsub(ignore_subscribe_messages=True)
         for channel in [
             "meta_antennaproperties",
-            "meta_obs1",
+            "meta_obs",
             "vci_update"
         ]:
             try:
@@ -246,9 +246,9 @@ class DelayModel(threading.Thread):
             #Now, we want to check whether the source pointing has updated OR whether it has been over 5 seconds since
             #we last calculated delay coefficients:
             t = time.time() * 1e6 #microseconds
-            if ((t - self.delay_data["loadtime_us"]) >= 5 or self.source_point_update.is_set()):
+            if ((t - self.delay_data["loadtime_us"]) >= 5e6 or self.source_point_update.is_set()):
                 #clear event here as opposed to at the end of the if block
-                #to reduce risk that the listening process sets the event as loadtime becomes > 5 and we 
+                #to reduce risk that the listening process sets the event as loadtime becomes > 5s and we 
                 #only process the new pointing ~5s from now or when the next pointing arrives.
                 self.source_point_update.clear()
                 t_int = np.round(t) #microsecond integer
