@@ -13,11 +13,12 @@ from textwrap import dedent
 import pprint
 from cosmic.observations.slackbot import SlackBot
 from cosmic.fengines import ant_remotefeng_map
-from cosmic.redis_actions import redis_obj, redis_hget_keyvalues, redis_publish_dict_to_hash, redis_clear_hash_contents, redis_publish_service_pulse,redis_publish_dict_to_channel
+from cosmic.redis_actions import redis_obj, redis_hget_keyvalues, redis_publish_dict_to_hash, redis_clear_hash_contents, redis_publish_service_pulse, redis_publish_dict_to_channel
 from plot_delay_phase import plot_delay_phase
 
 LOGFILENAME = "/home/cosmic/logs/DelayCalibration.log"
 CALIBRATION_LOG_DIR = "/home/cosmic/dev/logs/calibration_logs/"
+OBS_LOG_DIR = "/home/cosmic/dev/logs/obs_meta/"
 logger = logging.getLogger('calibration_delays')
 logger.setLevel(logging.DEBUG)
 
@@ -44,6 +45,8 @@ GPU_PHASES_REDIS_HASH = "GPU_calibrationPhases"
 GPU_GAINS_REDIS_HASH = "GPU_calibrationGains"
 GPU_PHASES_REDIS_CHANNEL = "gpu_calibrationphases"
 GPU_GAINS_REDIS_CHANNEL = "gpu_calibrationgains"
+
+CALIBRATION_CACHE_HASH = "CAL_fixedValuePaths"
 
 class CalibrationGainCollector():
     def __init__(self, redis_obj, fixed_delay_csv, fixed_phase_json, hash_timeout=20, re_arm_time = 30, dry_run = False, no_phase_cal = False,
@@ -113,6 +116,7 @@ class CalibrationGainCollector():
             logger.debug(message)
 
     def await_trigger(self):
+        redis_publish_service_pulse(self.redis_obj, SERVICE_NAME)
         pubsub = self.redis_obj.pubsub(ignore_subscribe_messages=True)
         try:
             pubsub.subscribe(GPU_GAINS_REDIS_CHANNEL)
@@ -314,7 +318,6 @@ class CalibrationGainCollector():
 
     def start(self):
         while True:
-            redis_publish_service_pulse(self.redis_obj, SERVICE_NAME)
             #Launch function that waits for first valid message:
             trigger = self.await_trigger()
             if trigger:
@@ -323,25 +326,30 @@ class CalibrationGainCollector():
                     Dry run = {self.dry_run}, applying phase calibrations = {not self.no_phase_cal},
                     hash timeout = {self.hash_timeout}s and re-arm time = {self.re_arm_time}s""", severity = "INFO")
 
-                #Fetch and calculate needed metadata
-                self.log_and_post_slackmessage("Collecting present VLA mcast observation metadata", severity = "INFO")
-                try:
-                    metadata = redis_hget_keyvalues(self.redis_obj, "META")
-                except:
-                    self.log_and_post_slackmessage("Could not collect present VLA mcast metadata. Ignoring trigger...", severity = "ERROR")
-                    continue
-                #FOR SPOOFING:
-                # self.basebands = [
-                #     "AC_8BIT",
-                #     "BD_8BIT"
-                #     ]
-                # fcent_mhz = [
-                #     3148.0,
-                #     3148.0
-                # ]
-                # tbin = 1e-6
+                #FOR SPOOFING - TEMPORARY AND NEEDS TO BE SMARTER:
+                self.basebands = [
+                    "AC_8BIT",
+                    "BD_8BIT"
+                    ]
 
-                self.basebands = metadata.get('baseband')
+                #Start function that waits for hash_timeout before collecting redis hash.
+                ant_tune_to_collected_gains, collected_frequencies, self.ants, obs_id = self.collect_phases_for_hash_timeout(self.hash_timeout) 
+
+                #FOR SPOOFING - TEMPORARY AND NEEDS TO BE SMARTER:
+                obs_meta_file_path = (os.path.join(OBS_LOG_DIR,obs_id+"_AC_8BIT_metadata.json") if os.path.exists(os.path.join(OBS_LOG_DIR,obs_id+"_AC_8BIT_metadata.json"))
+                     else os.path.join(OBS_LOG_DIR,obs_id+"_BD_8BIT_metadata.json"))
+
+                try:
+                    with open(obs_meta_file_path) as f:
+                        metadata = json.load(f)["META"]
+                except:
+                    self.log_and_post_slackmessage(f"""
+                    Could not find any metadata logs corresponding to:
+                    {obs_id}.
+                    Cannot extract useful metadata required for calibration gain collation.
+                    """, severity ="ERROR")
+                    return
+
                 fcent_mhz = np.array(metadata['fcents'],dtype=float)
                 fcent_hz = np.array(fcent_mhz)*1e6
                 tbin = float(metadata['tbin'])
@@ -352,9 +360,6 @@ class CalibrationGainCollector():
                     `basebands = {self.basebands}`
                     `fcents = {fcent_mhz} MHz`
                     `tbin = {tbin}`""", severity = "INFO")
-
-                #Start function that waits for hash_timeout before collecting redis hash.
-                ant_tune_to_collected_gains, collected_frequencies, self.ants, obs_id = self.collect_phases_for_hash_timeout(self.hash_timeout) 
 
                 #calculate residual delays/phases for the collected frequencies
                 delay_residual_map, phase_residual_map, amp_map = self.calc_residual_delays_and_phases(ant_tune_to_collected_gains, collected_frequencies)
@@ -420,6 +425,7 @@ class CalibrationGainCollector():
                                 Could *not* read fixed phases from {self.fixed_phase_json} for updating with calculated residuals.
                                 Clearning up and aborting calibration process...
                             """, severity = "ERROR")
+                            return
                         self.log_and_post_slackmessage(f"""
                         Modifying fixed-phases found in
                         ```{self.fixed_phase_json}```
@@ -448,6 +454,7 @@ class CalibrationGainCollector():
                         with open(modified_fixed_phases_path, 'w+') as f:
                             json.dump(updated_fixed_phases, f)
 
+                        redis_publish_dict_to_hash(self.redis_obj, CALIBRATION_CACHE_HASH,{"fixed_phase":modified_fixed_phases_path})
                         #Overwrite the json path to the new json path for modification in the next run
                         self.fixed_phase_json = modified_fixed_phases_path
 
@@ -466,6 +473,7 @@ class CalibrationGainCollector():
                             Could *not* read fixed delays from {self.fixed_delay_csv} for updating with calculated residuals.
                             Clearning up and aborting calibration process...
                         """, severity = "ERROR")
+                        return
                     self.log_and_post_slackmessage(f"""
                     Modifying fixed-delays found in
                     ```{self.fixed_delay_csv}```
@@ -501,6 +509,7 @@ class CalibrationGainCollector():
                     self.delay_calibration.calib_csv = modified_fixed_delays_path
                     self.delay_calibration.run()
 
+                    redis_publish_dict_to_hash(self.redis_obj, CALIBRATION_CACHE_HASH,{"fixed_delay":modified_fixed_delays_path})
                     #Overwrite the csv path to the new csv path for modification in the next run
                     self.fixed_delay_csv = modified_fixed_delays_path
                 
@@ -558,10 +567,12 @@ if __name__ == "__main__":
     from GPU nodes and performing necessary actions, the service will sleep for this duration until re-arming""")
     parser.add_argument("--no-phase-cal", action="store_true", help="""If specified, only residual delays are updated and no
     phase calibrations are applied.""")
-    parser.add_argument("-f","--fixed-delay-to-update", type=str, required=True, help="""
-    csv file path to latest fixed delays that must be modified by the residual delays calculated in this script.""")
-    parser.add_argument("-p","--fixed-phase-to-update", type=str, required=True, help="""
-    json file path to latest fixed phases that must be modified by the residual phases calculated in this script.""")
+    parser.add_argument("-f","--fixed-delay-to-update", type=str, required=False, help="""
+    csv file path to latest fixed delays that must be modified by the residual delays calculated in this script. If not provided,
+    process will try use fixed-delay file path in cache.""")
+    parser.add_argument("-p","--fixed-phase-to-update", type=str, required=False, help="""
+    json file path to latest fixed phases that must be modified by the residual phases calculated in this script. If not provided,
+    process will try use fixed-phase file path in cache.""")
     parser.add_argument("--no-slack-post", action="store_true",help="""If specified, logs are not posted to slack.""")
     args = parser.parse_args()
 
@@ -573,11 +584,26 @@ if __name__ == "__main__":
         topic = f"*Logging the VLA calibration in the loop*"
         slackbot.set_topic(topic)
         slackbot.post_message(f"""
-        Starting calibration observation process with starting fixed-delays:
-        {args.fixed_delay_to_update}""")
+        Starting calibration observation process...""")
+        
+    try:
+        filepath_cache = redis_hget_keyvalues(redis_obj, CALIBRATION_CACHE_HASH)
+    except:
+        print(f"Could not fetch filepath cache from {CALIBRATION_CACHE_HASH}.")
+    try:
+        fixed_delay_path = filepath_cache["fixed_delay"]
+    except:
+        print(f"Contents of {CALIBRATION_CACHE_HASH} did not contain fixed_delay entry.")
+    try:
+        fixed_phase_path = filepath_cache["fixed_phase"]
+    except:
+        print(f"Contents of {CALIBRATION_CACHE_HASH} did not contain fixed_phase entry.")
+
+    fixed_delay_path = args.fixed_delay_to_update if args.fixed_delay_to_update is not None else fixed_delay_path
+    fixed_phase_path = args.fixed_phase_to_update if args.fixed_phase_to_update is not None else fixed_phase_path
 
 
-    calibrationGainCollector = CalibrationGainCollector(redis_obj, fixed_delay_csv = args.fixed_delay_to_update, fixed_phase_json = args.fixed_phase_to_update,
+    calibrationGainCollector = CalibrationGainCollector(redis_obj, fixed_delay_csv = fixed_delay_path, fixed_phase_json = fixed_phase_path,
                                 hash_timeout = args.hash_timeout, dry_run = args.dry_run, no_phase_cal = args.no_phase_cal,
                                 re_arm_time = args.re_arm_time, slackbot = slackbot)
     calibrationGainCollector.start()
