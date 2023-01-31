@@ -66,6 +66,7 @@ class DelayModel(threading.Thread):
 
         #intialise source pointings dictionary
         self.source_points_lock = threading.Lock()
+        self.source_point_update = threading.Event()
         self.source_pointings_dict = {}
 
         #initialise the antenna positions
@@ -95,7 +96,7 @@ class DelayModel(threading.Thread):
             "sideband_0":None,
             "sideband_1":None,
             "time_value":None,
-            "loadtime":None
+            "loadtime":0
             }
         
         #thread for calculating delays
@@ -188,7 +189,9 @@ class DelayModel(threading.Thread):
 
     def redis_chan_listener(self):
         """This function listens for updates on the  "meta_antennaproperties"
-        and "meta_obs" redis channels"""
+        and "meta_obs" redis channels.
+        Messages are listened for continuously but their contents is checked in
+        calculate delay at a polling rate."""
         pubsub = self.redis_obj.pubsub(ignore_subscribe_messages=True)
         for channel in [
             "meta_antennaproperties",
@@ -207,7 +210,9 @@ class DelayModel(threading.Thread):
                     self._calc_itrf_from_antprop(ant2prop)
                 if message['channel'] == "meta_obs":
                     obsmeta = json.loads(message.get('data'))
-                    self._calc_source_coords_and_lo_eff_from_obs_meta(obsmeta)    
+                    self._calc_source_coords_and_lo_eff_from_obs_meta(obsmeta) 
+                    #Tell other processes that a new pointing has arrived
+                    self.source_point_update.set()   
                 if message['channel'] == "vci_update":
                     data = json.loads(message.get('data'))
                     if data:
@@ -232,82 +237,87 @@ class DelayModel(threading.Thread):
         while True:
             redis_publish_service_pulse(self.redis_obj, SERVICE_NAME)
 
+            #Now, we want to check whether the source pointing has updated OR whether it has been over 5 seconds since
+            #we last calculated delay coefficients:
             t = time.time()
-            t_int = np.floor(t)
-            loadtime_from_now = self.source_pointings_dict['loadtime'] - t
+            if ((t - self.delay_data["loadtime"]) >= 5 or self.source_point_update.is_set()):
+                #clear event here to avoid risk that the listening process sets the event as loadtime becomes > 5 and we miss a message.
+                self.source_point_update.clear()
+                t_int = np.round(t)
+                loadtime_from_now = None if self.source_pointings_dict['loadtime'] is None else self.source_pointings_dict['loadtime'] - t 
 
-            if (loadtime_from_now < self.min_loadtime_offset
-                or 
-                loadtime_from_now > self.max_loadtime_offset):
-                #loadtime for source pointing is too far in the future or is in the past. Use current pointings on hand and set loadtime to 
-                #self.min_loadtime_offset from now.
-                loadtime = t_int + self.min_loadtime_offset
+                if loadtime_from_now is None:
+                    #loadtime is None. Update source pointing and calculate coefficients and set loadtime to 
+                    #self.min_loadtime_offset from now.
+                    self.source = SkyCoord(self.source_pointings_dict['ra'], self.source_pointings_dict['dec'], unit='deg')
+                    time_to_load = t_int + self.min_loadtime_offset
+                    sideband = self.source_pointings_dict['sideband']
+                    sslo = self.source_pointings_dict['sslo']
+                
+                elif (loadtime_from_now < self.min_loadtime_offset
+                    or 
+                    loadtime_from_now > self.max_loadtime_offset):
+                    #loadtime for source pointing is too far in the future or is in the past. Use current pointings on hand and set loadtime to 
+                    #self.min_loadtime_offset from now.
+                    time_to_load = t_int + self.min_loadtime_offset
 
-            elif(loadtime_from_now >= self.min_loadtime_offset
-                and
-                loadtime_from_now <= self.max_loadtime_offset):
-                #loadtime is within threshold. Update source pointing and calculate coefficients and set loadtime to 
-                #loadtime.
-                self.source = SkyCoord(self.source_pointings_dict['ra'], self.source_pointings_dict['dec'], unit='deg')
-                loadtime = self.source_pointings_dict['loadtime']
-                sideband = self.source_pointings_dict['sideband']
-                sslo = self.source_pointings_dict['sslo']
+                elif(loadtime_from_now >= self.min_loadtime_offset
+                    and
+                    loadtime_from_now <= self.max_loadtime_offset):
+                    #loadtime is within threshold. Update source pointing, calculate coefficients and set loadtime to 
+                    #loadtime.
+                    self.source = SkyCoord(self.source_pointings_dict['ra'], self.source_pointings_dict['dec'], unit='deg')
+                    time_to_load = self.source_pointings_dict['loadtime']
+                    sideband = self.source_pointings_dict['sideband']
+                    sslo = self.source_pointings_dict['sslo']
 
-            elif loadtime_from_now is None:
-                #loadtime is None. Update source pointing and calculate coefficients and set loadtime to 
-                #self.min_loadtime_offset from now.
-                self.source = SkyCoord(self.source_pointings_dict['ra'], self.source_pointings_dict['dec'], unit='deg')
-                loadtime = t_int + self.min_loadtime_offset
-                sideband = self.source_pointings_dict['sideband']
-                sslo = self.source_pointings_dict['sslo']
-            
-            else:
-                logger.error("Invalid loadtime provided")
+                else:
+                    logger.error("Invalid loadtime provided")
 
-            tts = [3, (TIME_INTERPOLATION_LENGTH/2) + 3, TIME_INTERPOLATION_LENGTH + 3]
-            tts = np.array(tts) + t_int # Interpolate time samples with 3s advance
-            dt = TIME_INTERPOLATION_LENGTH/2
-            ts = Time(tts, format='unix')
+                tts = [3, (TIME_INTERPOLATION_LENGTH/2) + 3, TIME_INTERPOLATION_LENGTH + 3]
+                tts = np.array(tts) + t_int # Interpolate time samples with 3s advance
+                dt = TIME_INTERPOLATION_LENGTH/2
+                ts = Time(tts, format='unix')
 
-            # perform coordinate transformation to uvw
-            uvw1 = compute_uvw(ts[0], self.source, self.itrf[['X','Y','Z']], ITRF_CENTER)
-            uvw2 = compute_uvw(ts[1], self.source, self.itrf[['X','Y','Z']], ITRF_CENTER)
-            uvw3 = compute_uvw(ts[2], self.source, self.itrf[['X','Y','Z']], ITRF_CENTER)
+                # perform coordinate transformation to uvw
+                uvw1 = compute_uvw(ts[0], self.source, self.itrf[['X','Y','Z']], ITRF_CENTER)
+                uvw2 = compute_uvw(ts[1], self.source, self.itrf[['X','Y','Z']], ITRF_CENTER)
+                uvw3 = compute_uvw(ts[2], self.source, self.itrf[['X','Y','Z']], ITRF_CENTER)
 
-            # "w" coordinate represents the goemetric delay in light-meters
-            w1 = uvw1[...,2]
-            w2 = uvw2[...,2]
-            w3 = uvw3[...,2]
+                # "w" coordinate represents the goemetric delay in light-meters
+                w1 = uvw1[...,2]
+                w2 = uvw2[...,2]
+                w3 = uvw3[...,2]
 
-            # Calibration delays are added in the controller
-            delay1 = (w1/const.c.value)
-            delay2 = (w2/const.c.value)
-            delay3 = (w3/const.c.value)
+                # Calibration delays are added in the controller
+                delay1 = (w1/const.c.value)
+                delay2 = (w2/const.c.value)
+                delay3 = (w3/const.c.value)
 
-            # Compute the delay rate in s/s
-            rate1 = (delay2 - delay1) / (dt)
-            rate2 = (delay3 - delay2) / (dt)
-            rate = (delay3 - delay1) / (2*dt)
+                # Compute the delay rate in s/s
+                rate1 = (delay2 - delay1) / (dt)
+                rate2 = (delay3 - delay2) / (dt)
+                rate = (delay3 - delay1) / (2*dt)
 
-            # Compute the delay rate rate in s/s^2
-            raterate = (rate2 - rate1) / (dt)
+                # Compute the delay rate rate in s/s^2
+                raterate = (rate2 - rate1) / (dt)
 
-            self.delay_data["delay_ns"] = (delay2*1e9).tolist()
-            self.delay_data["delay_rate_nsps"] = (rate*1e9).tolist()
-            self.delay_data["delay_raterate_nsps2"] = (raterate*1e9).tolist()
-            self.delay_data["effective_lo_0_mhz"] = sslo[0]
-            self.delay_data["effective_lo_1_mhz"] = sslo[1]
-            self.delay_data["sideband_0"] = sideband[0]
-            self.delay_data["sideband_1"] = sideband[1]
-            self.delay_data["time_value"] = tts[1]
-            self.delay_data["loadtime"] = loadtime
+                self.delay_data["delay_ns"] = (delay2*1e9).tolist()
+                self.delay_data["delay_rate_nsps"] = (rate*1e9).tolist()
+                self.delay_data["delay_raterate_nsps2"] = (raterate*1e9).tolist()
+                self.delay_data["effective_lo_0_mhz"] = sslo[0]
+                self.delay_data["effective_lo_1_mhz"] = sslo[1]
+                self.delay_data["sideband_0"] = sideband[0]
+                self.delay_data["sideband_1"] = sideband[1]
+                self.delay_data["time_value"] = tts[1]
+                self.delay_data["loadtime"] = time_to_load
 
-            if publish:
-                self.publish_delays()
-            else:
-                return pd.DataFrame(self.delay_data, index=list(self.itrf.index.values)).to_dict('index')               
-
-            time.sleep(time.time() + self.max_loadtime_offset - t)
+                if publish:
+                    self.publish_delays()
+                else:
+                    return pd.DataFrame(self.delay_data, index=list(self.itrf.index.values)).to_dict('index')
+                      
+            time.sleep(1e-1)
 
     def publish_delays(self):
         """
