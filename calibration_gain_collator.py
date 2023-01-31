@@ -428,7 +428,7 @@ class CalibrationGainCollector():
                         updated_fixed_phases = {}
                         for ant, phases in fixed_phases.items():
                             if ant in full_residual_phase_map:
-                                updated_fixed_phases[ant] = (np.array(phases,dtype=float) - full_residual_phase_map[ant]).tolist()
+                                updated_fixed_phases[ant] = (np.array(phases,dtype=float) + full_residual_phase_map[ant]).tolist()
                             else:
                                 updated_fixed_phases[ant] = phases
 

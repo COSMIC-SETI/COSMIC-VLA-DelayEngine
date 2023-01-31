@@ -54,7 +54,7 @@ class DelayLogger:
         while True:
             redis_publish_service_pulse(self.redis_obj, SERVICE_NAME)
             delay_status_dict = redis_hget_keyvalues(self.redis_obj, "FENG_delayStatus")
-            ant_residual_phase_dict = redis_hget_keyvalues(self.redis_obj, "META_residualPhases")
+            ant_residual_phase_dict = redis_hget_keyvalues(self.redis_obj, "META_calibrationPhases")
             for ant, feng in self.ant_feng_map.items():
                 try:
                     if ant in delay_status_dict:
