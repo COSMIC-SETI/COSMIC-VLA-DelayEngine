@@ -61,8 +61,8 @@ class DelayModel(threading.Thread):
         threading.Thread.__init__(self)
 
         self.redis_obj = redis_obj
-        self.min_loadtime_offset = min_loadtime_offset
-        self.max_loadtime_offset = max_loadtime_offset
+        self.min_loadtime_offset = min_loadtime_offset *1e6 #microseconds
+        self.max_loadtime_offset = max_loadtime_offset *1e6 #microseconds
 
         #intialise source pointings dictionary
         self.source_points_lock = threading.Lock()
@@ -96,7 +96,7 @@ class DelayModel(threading.Thread):
             "sideband_0":None,
             "sideband_1":None,
             "time_value":None,
-            "loadtime":0
+            "loadtime_us":0
             }
         
         #thread for calculating delays
@@ -195,7 +195,7 @@ class DelayModel(threading.Thread):
         pubsub = self.redis_obj.pubsub(ignore_subscribe_messages=True)
         for channel in [
             "meta_antennaproperties",
-            "meta_obs",
+            "meta_obs1",
             "vci_update"
         ]:
             try:
@@ -208,11 +208,11 @@ class DelayModel(threading.Thread):
                     #Then here we want to collect X,Y and Z coordinates
                     ant2prop = json.loads(message.get('data'))
                     self._calc_itrf_from_antprop(ant2prop)
-                if message['channel'] == "meta_obs":
+                if message['channel'] == "meta_obs1":
                     obsmeta = json.loads(message.get('data'))
-                    self._calc_source_coords_and_lo_eff_from_obs_meta(obsmeta) 
+                    self._calc_source_coords_and_lo_eff_from_obs_meta(obsmeta)
                     #Tell other processes that a new pointing has arrived
-                    self.source_point_update.set()   
+                    self.source_point_update.set()
                 if message['channel'] == "vci_update":
                     data = json.loads(message.get('data'))
                     if data:
@@ -234,55 +234,66 @@ class DelayModel(threading.Thread):
         makes use of the redis hash antenna coordinates and source coordinates. Therefore
         for custom coordinates, self.itrf or self.source must be overwritten.
         """
+        #initialise:
+        with self.source_points_lock:
+            sideband = self.source_pointings_dict['sideband']
+            sslo = self.source_pointings_dict['sslo']
+            self.source =  SkyCoord(self.source_pointings_dict['ra'], self.source_pointings_dict['dec'], unit='deg')
+
         while True:
             redis_publish_service_pulse(self.redis_obj, SERVICE_NAME)
 
             #Now, we want to check whether the source pointing has updated OR whether it has been over 5 seconds since
             #we last calculated delay coefficients:
-            t = time.time()
-            if ((t - self.delay_data["loadtime"]) >= 5 or self.source_point_update.is_set()):
-                #clear event here to avoid risk that the listening process sets the event as loadtime becomes > 5 and we miss a message.
+            t = time.time() * 1e6 #microseconds
+            if ((t - self.delay_data["loadtime_us"]) >= 5 or self.source_point_update.is_set()):
+                #clear event here as opposed to at the end of the if block
+                #to reduce risk that the listening process sets the event as loadtime becomes > 5 and we 
+                #only process the new pointing ~5s from now or when the next pointing arrives.
                 self.source_point_update.clear()
-                t_int = np.round(t)
-                loadtime_from_now = None if self.source_pointings_dict['loadtime'] is None else self.source_pointings_dict['loadtime'] - t 
+                t_int = np.round(t) #microsecond integer
+                with self.source_points_lock:
 
-                if loadtime_from_now is None:
-                    #loadtime is None. Update source pointing and calculate coefficients and set loadtime to 
-                    #self.min_loadtime_offset from now.
-                    self.source = SkyCoord(self.source_pointings_dict['ra'], self.source_pointings_dict['dec'], unit='deg')
-                    time_to_load = t_int + self.min_loadtime_offset
-                    sideband = self.source_pointings_dict['sideband']
-                    sslo = self.source_pointings_dict['sslo']
-                
-                elif (loadtime_from_now < self.min_loadtime_offset
-                    or 
-                    loadtime_from_now > self.max_loadtime_offset):
-                    #loadtime for source pointing is too far in the future or is in the past. Use current pointings on hand and set loadtime to 
-                    #self.min_loadtime_offset from now.
-                    time_to_load = t_int + self.min_loadtime_offset
+                    loadtime_from_now = None if self.source_pointings_dict['loadtime'] is None else self.source_pointings_dict['loadtime'] - t 
 
-                elif(loadtime_from_now >= self.min_loadtime_offset
-                    and
-                    loadtime_from_now <= self.max_loadtime_offset):
-                    #loadtime is within threshold. Update source pointing, calculate coefficients and set loadtime to 
-                    #loadtime.
-                    self.source = SkyCoord(self.source_pointings_dict['ra'], self.source_pointings_dict['dec'], unit='deg')
-                    time_to_load = self.source_pointings_dict['loadtime']
-                    sideband = self.source_pointings_dict['sideband']
-                    sslo = self.source_pointings_dict['sslo']
+                    if loadtime_from_now is None:
+                        #loadtime is None. Update source pointing and calculate coefficients and set loadtime to 
+                        #self.min_loadtime_offset from now.
+                        self.source = SkyCoord(self.source_pointings_dict['ra'], self.source_pointings_dict['dec'], unit='deg')
+                        time_to_load = t_int + self.min_loadtime_offset
+                        sideband = self.source_pointings_dict['sideband']
+                        sslo = self.source_pointings_dict['sslo']
+                    
+                    elif (loadtime_from_now < self.min_loadtime_offset
+                        or 
+                        loadtime_from_now > self.max_loadtime_offset):
+                        #loadtime for source pointing is too far in the future or is in the past. Use current pointings on hand and set loadtime to 
+                        #self.min_loadtime_offset from now.
+                        time_to_load = t_int + self.min_loadtime_offset
 
-                else:
-                    logger.error("Invalid loadtime provided")
+                    elif(loadtime_from_now >= self.min_loadtime_offset
+                        and
+                        loadtime_from_now <= self.max_loadtime_offset):
+                        #loadtime is within threshold. Update source pointing, calculate coefficients and set loadtime to 
+                        #loadtime.
+                        self.source = SkyCoord(self.source_pointings_dict['ra'], self.source_pointings_dict['dec'], unit='deg')
+                        time_to_load = self.source_pointings_dict['loadtime']
+                        sideband = self.source_pointings_dict['sideband']
+                        sslo = self.source_pointings_dict['sslo']
+
+                    else:
+                        logger.error("Invalid loadtime provided")
 
                 tts = [3, (TIME_INTERPOLATION_LENGTH/2) + 3, TIME_INTERPOLATION_LENGTH + 3]
-                tts = np.array(tts) + t_int # Interpolate time samples with 3s advance
+                tts = np.array(tts) + (t_int * 1e-6) # Interpolate time samples with 3s advance
                 dt = TIME_INTERPOLATION_LENGTH/2
                 ts = Time(tts, format='unix')
 
                 # perform coordinate transformation to uvw
-                uvw1 = compute_uvw(ts[0], self.source, self.itrf[['X','Y','Z']], ITRF_CENTER)
-                uvw2 = compute_uvw(ts[1], self.source, self.itrf[['X','Y','Z']], ITRF_CENTER)
-                uvw3 = compute_uvw(ts[2], self.source, self.itrf[['X','Y','Z']], ITRF_CENTER)
+                with self.itrf_lock:
+                    uvw1 = compute_uvw(ts[0], self.source, self.itrf[['X','Y','Z']], ITRF_CENTER)
+                    uvw2 = compute_uvw(ts[1], self.source, self.itrf[['X','Y','Z']], ITRF_CENTER)
+                    uvw3 = compute_uvw(ts[2], self.source, self.itrf[['X','Y','Z']], ITRF_CENTER)
 
                 # "w" coordinate represents the goemetric delay in light-meters
                 w1 = uvw1[...,2]
@@ -310,7 +321,7 @@ class DelayModel(threading.Thread):
                 self.delay_data["sideband_0"] = sideband[0]
                 self.delay_data["sideband_1"] = sideband[1]
                 self.delay_data["time_value"] = tts[1]
-                self.delay_data["loadtime"] = time_to_load
+                self.delay_data["loadtime_us"] = time_to_load
 
                 if publish:
                     self.publish_delays()
@@ -328,7 +339,8 @@ class DelayModel(threading.Thread):
         delay_dict = df.to_dict('index')
         for ant, delays in delay_dict.items():
             #add in the lo values for 2nd compensation phase tracking
-            delays["lo_hz"] = configure.order_lo_dict_values(self.antname_lo_fshift_dict[ant])
+            with self.antname_fshift_lock:
+                delays["lo_hz"] = configure.order_lo_dict_values(self.antname_lo_fshift_dict[ant])
             delay_dict[ant] = delays
             redis_publish_dict_to_channel(self.redis_obj, f"{ant}_delays", delays)
         delay_dict['deg_ra'] = self.source.ra.deg
