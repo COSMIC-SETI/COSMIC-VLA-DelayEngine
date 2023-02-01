@@ -53,7 +53,9 @@ class CalibrationGainCollector():
     nof_streams = 4, nof_tunings = 2, nof_pols = 2, nof_channels = 1024, slackbot=None):
         self.redis_obj = redis_obj
         self.fixed_delay_csv = fixed_delay_csv
+        redis_publish_dict_to_hash(self.redis_obj, CALIBRATION_CACHE_HASH,{"fixed_delay":fixed_delay_csv})
         self.fixed_phase_json = fixed_phase_json
+        redis_publish_dict_to_hash(self.redis_obj, CALIBRATION_CACHE_HASH,{"fixed_phase":fixed_phase_json})
         self.hash_timeout = hash_timeout
         self.re_arm_time = re_arm_time
         self.dry_run = dry_run
@@ -116,7 +118,6 @@ class CalibrationGainCollector():
             logger.debug(message)
 
     def await_trigger(self):
-        redis_publish_service_pulse(self.redis_obj, SERVICE_NAME)
         pubsub = self.redis_obj.pubsub(ignore_subscribe_messages=True)
         try:
             pubsub.subscribe(GPU_GAINS_REDIS_CHANNEL)
@@ -128,6 +129,7 @@ class CalibrationGainCollector():
             return False
         self.log_and_post_slackmessage("Calibration process is armed and awaiting triggers from GPU nodes.", severity="INFO")
         while True:
+            redis_publish_service_pulse(self.redis_obj, SERVICE_NAME)
             #Listen for first message on subscribed channels - ignoring None
             message = pubsub.get_message(timeout=0.1)
             if message and "message" == message["type"]:
