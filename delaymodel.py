@@ -48,7 +48,7 @@ ITRF_Z_OFFSET = 3554875.9
 ITRF_CENTER = [ITRF_X_OFFSET, ITRF_Y_OFFSET, ITRF_Z_OFFSET]
 
 class DelayModel(threading.Thread):
-    def __init__(self, redis_obj):
+    def __init__(self, redis_obj, min_loadtime_offset = 3, max_loadtime_offset = 10):
         """
         A delay calculation object.
         Makes use of observation metadata and the vla antenna positions
@@ -61,8 +61,16 @@ class DelayModel(threading.Thread):
         threading.Thread.__init__(self)
 
         self.redis_obj = redis_obj
+        self.min_loadtime_offset = min_loadtime_offset *1e6 #microseconds
+        self.max_loadtime_offset = max_loadtime_offset *1e6 #microseconds
+
+        #intialise source pointings dictionary
+        self.source_points_lock = threading.Lock()
+        self.source_point_update = threading.Event()
+        self.source_pointings_dict = {}
 
         #initialise the antenna positions
+        self.itrf_lock = threading.Lock()
         logger.info("Collecting initial antenna positions...")
         self._calc_itrf_from_antprop(redis_hget_keyvalues(
             self.redis_obj, "META_antennaProperties"
@@ -75,6 +83,7 @@ class DelayModel(threading.Thread):
         ))
 
         #initialise the ant to fshift dictionary
+        self.antname_fshift_lock = threading.Lock()
         self._fetch_antname_lo_fshift_dict()
 
         #set up delay_data dictionary
@@ -87,7 +96,7 @@ class DelayModel(threading.Thread):
             "sideband_0":None,
             "sideband_1":None,
             "time_value":None,
-            "time_to_load":None
+            "loadtime_us":0
             }
         
         #thread for calculating delays
@@ -95,7 +104,7 @@ class DelayModel(threading.Thread):
             target=self.calculate_delay, args=(), daemon=False
         )
 
-        #thread for listening to ra/dec updates
+        #thread for listening to ra/dec, antposition and other updates
         self.listen_for_source = threading.Thread(
             target=self.redis_chan_listener, args=(), daemon=False
         )
@@ -132,38 +141,57 @@ class DelayModel(threading.Thread):
                 index+=1
         data = {"X":X, "Y":Y, "Z":Z}
         df = pd.DataFrame(data, index=ANTNAMES)
-        self.itrf = df[df.index.notnull()]
-        self.antnames = df.index[df.index.notnull()]
-        logger.info("Collected antenna position values. Publishing now...")
-        redis_publish_dict_to_hash(self.redis_obj, "META_antennaITRF",  self.itrf.to_dict('index'))
+        with  self.itrf_lock:
+            self.itrf = df[df.index.notnull()]
+            self.antnames = df.index[df.index.notnull()]
+            logger.info("Collected antenna position values. Publishing now...")
+            redis_publish_dict_to_hash(self.redis_obj, "META_antennaITRF",  self.itrf.to_dict('index'))
     
     def _fetch_antname_lo_fshift_dict(self):
         """
         Fetch and translate into a dictionary of {antname: {lo: fshift_value}}
         the redis hash "META_VCI_DELAY"
         """
-        self.antname_lo_fshift_dict = delays.get_antToFshiftMap(
-            self.redis_obj,
-            ["A", "B", "C", "D"],
-            delays.get_sideband(self.redis_obj),
-            self.antnames,
-        )
+        with self.antname_fshift_lock:
+            self.antname_lo_fshift_dict = delays.get_antToFshiftMap(
+                self.redis_obj,
+                ["A", "B", "C", "D"],
+                delays.get_sideband(self.redis_obj),
+                self.antnames,
+            )
     
     def _calc_source_coords_and_lo_eff_from_obs_meta(self, obs_meta):
         """
-        Accept an meta obs dictionary and calculate source
-        coordinates from the ra/dec contained therein
+        Accept a meta obs dictionary and calculate source
+        coordinates from the ra/dec contained therein. Store in 
+        source_point_dict{loadtime: {'ra': xx, 'dec' : xx, 'src' : source, 'sslo' : [], 'sideband' : []}}
         """
-        self.ra = obs_meta.get('ra_deg')
-        self.dec = obs_meta.get('dec_deg')
-        self.lo_eff = obs_meta.get('sslo')
-        self.sideband = obs_meta.get('sideband')
-        self.source = SkyCoord(self.ra, self.dec, unit='deg')
-        logger.info(f"Collected ra {self.ra}, dec {self.dec}, sslo {self.lo_eff} and sideband {self.sideband} from obs_meta.")
+        ra = obs_meta.get('ra_deg')
+        dec = obs_meta.get('dec_deg')
+        sslo = obs_meta.get('sslo')
+        sideband = obs_meta.get('sideband')
+        try:
+            loadtime = obs_meta.get('loadtime')
+        except:
+            loadtime = None
+            logger.info("No loadtime present in the observation metadata provided.")
+        logger.info(f"Collected ra {ra}, dec {dec}, sslo {sslo} and sideband {sideband} from obs_meta.")
+
+        #Update source dictionary with newly collected source
+        with self.source_points_lock:
+            self.source_pointings_dict = {
+                'ra'        : ra,
+                'dec'       : dec,
+                'sslo'      : sslo,
+                'sideband'  : sideband,
+                'loadtime'  : loadtime
+            }
 
     def redis_chan_listener(self):
         """This function listens for updates on the  "meta_antennaproperties"
-        and "meta_obs" redis channels"""
+        and "meta_obs" redis channels.
+        Messages are listened for continuously but their contents is checked in
+        calculate delay at a polling rate."""
         pubsub = self.redis_obj.pubsub(ignore_subscribe_messages=True)
         for channel in [
             "meta_antennaproperties",
@@ -180,9 +208,11 @@ class DelayModel(threading.Thread):
                     #Then here we want to collect X,Y and Z coordinates
                     ant2prop = json.loads(message.get('data'))
                     self._calc_itrf_from_antprop(ant2prop)
-                if message['channel'] == "meta_obs":
+                if message['channel'] == "meta_obs1":
                     obsmeta = json.loads(message.get('data'))
-                    self._calc_source_coords_and_lo_eff_from_obs_meta(obsmeta)    
+                    self._calc_source_coords_and_lo_eff_from_obs_meta(obsmeta)
+                    #Tell other processes that a new pointing has arrived
+                    self.source_point_update.set()
                 if message['channel'] == "vci_update":
                     data = json.loads(message.get('data'))
                     if data:
@@ -190,67 +220,115 @@ class DelayModel(threading.Thread):
     
     def calculate_delay(self, publish : bool = True):
         """
-        Started in a thread, this function will take the updated right ascension and
+        Started in a thread, this function takes `new_delay_period` to generate
+        a set of delay coordinates for delay tracking on the F-Engines.
+        If a new source pointing arrives that has a loadtime sub `threshold`
+        delay coefficients for this pointing will be immediately calculated and
+        sent to F-Engines.
+        
+        Delay coefficients are calculated by taking the updated right ascension and
         declination in conjunction with the antenna positions (in itrf measurements)
         to calculate the geometric delays for each antenna.
-        From these delay values we can produce delay rate and delay rate rate values
-        so that the fengines may interpolate delays while waiting for new delay value
-        updates.
+
         If started manually so that the delay dictionary is returned, this function
         makes use of the redis hash antenna coordinates and source coordinates. Therefore
         for custom coordinates, self.itrf or self.source must be overwritten.
         """
+        #initialise:
+        with self.source_points_lock:
+            sideband = self.source_pointings_dict['sideband']
+            sslo = self.source_pointings_dict['sslo']
+            self.source =  SkyCoord(self.source_pointings_dict['ra'], self.source_pointings_dict['dec'], unit='deg')
+
         while True:
             redis_publish_service_pulse(self.redis_obj, SERVICE_NAME)
-            t = np.floor(time.time())
-            tts = [3, (TIME_INTERPOLATION_LENGTH/2) + 3, TIME_INTERPOLATION_LENGTH + 3] # Interpolate time samples with 3s advance
-            tts = np.array(tts) + t
-            dt = TIME_INTERPOLATION_LENGTH/2
-            ts = Time(tts, format='unix')
 
-            # perform coordinate transformation to uvw
-            uvw1 = compute_uvw(ts[0], self.source, self.itrf[['X','Y','Z']], ITRF_CENTER)
-            uvw2 = compute_uvw(ts[1], self.source, self.itrf[['X','Y','Z']], ITRF_CENTER)
-            uvw3 = compute_uvw(ts[2], self.source, self.itrf[['X','Y','Z']], ITRF_CENTER)
+            #Now, we want to check whether the source pointing has updated OR whether it has been over 5 seconds since
+            #we last calculated delay coefficients:
+            t = time.time() * 1e6 #microseconds
+            if ((t - self.delay_data["loadtime_us"]) >= 5e6 or self.source_point_update.is_set()):
+                #clear event here as opposed to at the end of the if block
+                #to reduce risk that the listening process sets the event as loadtime becomes > 5s and we 
+                #only process the new pointing ~5s from now or when the next pointing arrives.
+                self.source_point_update.clear()
+                t_int = np.round(t) #microsecond integer
+                with self.source_points_lock:
 
-            # "w" coordinate represents the goemetric delay in light-meters
-            w1 = uvw1[...,2]
-            w2 = uvw2[...,2]
-            w3 = uvw3[...,2]
+                    loadtime_from_now = None if self.source_pointings_dict['loadtime'] is None else self.source_pointings_dict['loadtime'] - t 
 
-            # Calibration delays are added in the controller
-            delay1 = (w1/const.c.value)
-            delay2 = (w2/const.c.value)
-            delay3 = (w3/const.c.value)
+                    if loadtime_from_now is None:
+                        #loadtime is None. Update source pointing and calculate coefficients and set loadtime to 
+                        #self.min_loadtime_offset from now.
+                        self.source = SkyCoord(self.source_pointings_dict['ra'], self.source_pointings_dict['dec'], unit='deg')
+                        time_to_load = t_int + self.min_loadtime_offset
+                        sideband = self.source_pointings_dict['sideband']
+                        sslo = self.source_pointings_dict['sslo']
+                    
+                    elif (loadtime_from_now < self.min_loadtime_offset
+                        or 
+                        loadtime_from_now > self.max_loadtime_offset):
+                        #loadtime for source pointing is too far in the future or is in the past. Use current pointings on hand and set loadtime to 
+                        #self.min_loadtime_offset from now.
+                        time_to_load = t_int + self.min_loadtime_offset
 
-            # delay1 = -delay1
-            # delay2 = -delay2
-            # delay3 = -delay3
+                    elif(loadtime_from_now >= self.min_loadtime_offset
+                        and
+                        loadtime_from_now <= self.max_loadtime_offset):
+                        #loadtime is within threshold. Update source pointing, calculate coefficients and set loadtime to 
+                        #loadtime.
+                        self.source = SkyCoord(self.source_pointings_dict['ra'], self.source_pointings_dict['dec'], unit='deg')
+                        time_to_load = self.source_pointings_dict['loadtime']
+                        sideband = self.source_pointings_dict['sideband']
+                        sslo = self.source_pointings_dict['sslo']
 
-            # Compute the delay rate in s/s
-            rate1 = (delay2 - delay1) / (dt)
-            rate2 = (delay3 - delay2) / (dt)
-            rate = (delay3 - delay1) / (2*dt)
+                    else:
+                        logger.error("Invalid loadtime provided")
 
-            # Compute the delay rate rate in s/s^2
-            raterate = (rate2 - rate1) / (dt)
+                tts = [3, (TIME_INTERPOLATION_LENGTH/2) + 3, TIME_INTERPOLATION_LENGTH + 3]
+                tts = np.array(tts) + (t_int * 1e-6) # Interpolate time samples with 3s advance
+                dt = TIME_INTERPOLATION_LENGTH/2
+                ts = Time(tts, format='unix')
 
-            self.delay_data["delay_ns"] = (delay2*1e9).tolist()
-            self.delay_data["delay_rate_nsps"] = (rate*1e9).tolist()
-            self.delay_data["delay_raterate_nsps2"] = (raterate*1e9).tolist()
-            self.delay_data["effective_lo_0_mhz"] = self.lo_eff[0]
-            self.delay_data["effective_lo_1_mhz"] = self.lo_eff[1]
-            self.delay_data["sideband_0"] = self.sideband[0]
-            self.delay_data["sideband_1"] = self.sideband[1]
-            self.delay_data["time_value"] = tts[1]
+                # perform coordinate transformation to uvw
+                with self.itrf_lock:
+                    uvw1 = compute_uvw(ts[0], self.source, self.itrf[['X','Y','Z']], ITRF_CENTER)
+                    uvw2 = compute_uvw(ts[1], self.source, self.itrf[['X','Y','Z']], ITRF_CENTER)
+                    uvw3 = compute_uvw(ts[2], self.source, self.itrf[['X','Y','Z']], ITRF_CENTER)
 
-            if publish:
-                self.publish_delays()
-            else:
-                return pd.DataFrame(self.delay_data, index=list(self.itrf.index.values)).to_dict('index')
+                # "w" coordinate represents the goemetric delay in light-meters
+                w1 = uvw1[...,2]
+                w2 = uvw2[...,2]
+                w3 = uvw3[...,2]
 
-            #sleep for at least 2 seconds
-            time.sleep(2)
+                # Calibration delays are added in the controller
+                delay1 = (w1/const.c.value)
+                delay2 = (w2/const.c.value)
+                delay3 = (w3/const.c.value)
+
+                # Compute the delay rate in s/s
+                rate1 = (delay2 - delay1) / (dt)
+                rate2 = (delay3 - delay2) / (dt)
+                rate = (delay3 - delay1) / (2*dt)
+
+                # Compute the delay rate rate in s/s^2
+                raterate = (rate2 - rate1) / (dt)
+
+                self.delay_data["delay_ns"] = (delay2*1e9).tolist()
+                self.delay_data["delay_rate_nsps"] = (rate*1e9).tolist()
+                self.delay_data["delay_raterate_nsps2"] = (raterate*1e9).tolist()
+                self.delay_data["effective_lo_0_mhz"] = sslo[0]
+                self.delay_data["effective_lo_1_mhz"] = sslo[1]
+                self.delay_data["sideband_0"] = sideband[0]
+                self.delay_data["sideband_1"] = sideband[1]
+                self.delay_data["time_value"] = tts[1]
+                self.delay_data["loadtime_us"] = time_to_load
+
+                if publish:
+                    self.publish_delays()
+                else:
+                    return pd.DataFrame(self.delay_data, index=list(self.itrf.index.values)).to_dict('index')
+                      
+            time.sleep(1e-1)
 
     def publish_delays(self):
         """
@@ -261,11 +339,12 @@ class DelayModel(threading.Thread):
         delay_dict = df.to_dict('index')
         for ant, delays in delay_dict.items():
             #add in the lo values for 2nd compensation phase tracking
-            delays["lo_hz"] = configure.order_lo_dict_values(self.antname_lo_fshift_dict[ant])
+            with self.antname_fshift_lock:
+                delays["lo_hz"] = configure.order_lo_dict_values(self.antname_lo_fshift_dict[ant])
             delay_dict[ant] = delays
             redis_publish_dict_to_channel(self.redis_obj, f"{ant}_delays", delays)
-        delay_dict['deg_ra'] = self.ra
-        delay_dict['deg_dec'] = self.dec
+        delay_dict['deg_ra'] = self.source.ra.deg
+        delay_dict['deg_dec'] = self.source.dec.deg
         redis_publish_dict_to_hash(self.redis_obj, "META_modelDelays", delay_dict)
 
 if __name__ == "__main__":
@@ -276,6 +355,14 @@ if __name__ == "__main__":
     parser.add_argument(
     "-c", "--clean", action="store_true",help="Delete the existing log file and start afresh.",
     )
+    parser.add_argument(
+    "--min-time-offset", type=float ,help="The lower time threshold (s) for the loadtime values received by the delay model",
+    required=False, default = 3
+    )
+    parser.add_argument(
+    "--max-time-offset", type=float ,help="The upper time threshold for the loadtime values received by the delay model",
+    required=False, default = 10
+    )
     args = parser.parse_args()
     if os.path.exists(LOGFILENAME) and args.clean:
         logger.info("Removing previous log file...")
@@ -283,5 +370,5 @@ if __name__ == "__main__":
         logger.info("Log file removed.")
     else:
         logger.info("Nothing to clean, continuing...")
-    delayModel = DelayModel(redis_obj)
+    delayModel = DelayModel(redis_obj, min_loadtime_offset = args.min_time_offset, max_loadtime_offset = args.max_time_offset)
     delayModel.run()
