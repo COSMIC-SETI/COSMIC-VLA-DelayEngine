@@ -61,8 +61,8 @@ class DelayModel(threading.Thread):
         threading.Thread.__init__(self)
 
         self.redis_obj = redis_obj
-        self.min_loadtime_offset = min_loadtime_offset *1e6 #microseconds
-        self.max_loadtime_offset = max_loadtime_offset *1e6 #microseconds
+        self.min_loadtime_offset = min_loadtime_offset #s
+        self.max_loadtime_offset = max_loadtime_offset #s
 
         #intialise source pointings dictionary
         self.source_points_lock = threading.Lock()
@@ -98,6 +98,7 @@ class DelayModel(threading.Thread):
             "time_value":None,
             "loadtime_us":0
             }
+        self.last_sent_timestamp = 0.0
         
         #thread for calculating delays
         self.calculate_delay_thread = threading.Thread(
@@ -195,7 +196,7 @@ class DelayModel(threading.Thread):
         pubsub = self.redis_obj.pubsub(ignore_subscribe_messages=True)
         for channel in [
             "meta_antennaproperties",
-            "meta_obs",
+            "obs_phase_center",
             "vci_update"
         ]:
             try:
@@ -208,7 +209,7 @@ class DelayModel(threading.Thread):
                     #Then here we want to collect X,Y and Z coordinates
                     ant2prop = json.loads(message.get('data'))
                     self._calc_itrf_from_antprop(ant2prop)
-                if message['channel'] == "meta_obs1":
+                if message['channel'] == "obs_phase_center":
                     obsmeta = json.loads(message.get('data'))
                     self._calc_source_coords_and_lo_eff_from_obs_meta(obsmeta)
                     #Tell other processes that a new pointing has arrived
@@ -245,22 +246,22 @@ class DelayModel(threading.Thread):
 
             #Now, we want to check whether the source pointing has updated OR whether it has been over 5 seconds since
             #we last calculated delay coefficients:
-            t = time.time() * 1e6 #microseconds
-            if ((t - self.delay_data["loadtime_us"]) >= 5e6 or self.source_point_update.is_set()):
+            t = time.time()
+            t_us = t*1e6
+            if ((t - self.last_sent_timestamp) >= 5 or self.source_point_update.is_set()):
                 #clear event here as opposed to at the end of the if block
                 #to reduce risk that the listening process sets the event as loadtime becomes > 5s and we 
                 #only process the new pointing ~5s from now or when the next pointing arrives.
                 self.source_point_update.clear()
-                t_int = np.round(t) #microsecond integer
+                t_int = np.round(t_us) #microsecond integer
                 with self.source_points_lock:
 
-                    loadtime_from_now = None if self.source_pointings_dict['loadtime'] is None else self.source_pointings_dict['loadtime'] - t 
-
+                    loadtime_from_now = None if self.source_pointings_dict['loadtime'] is None else (self.source_pointings_dict['loadtime'] - t_us)*1e-6 
                     if loadtime_from_now is None:
                         #loadtime is None. Update source pointing and calculate coefficients and set loadtime to 
                         #self.min_loadtime_offset from now.
                         self.source = SkyCoord(self.source_pointings_dict['ra'], self.source_pointings_dict['dec'], unit='deg')
-                        time_to_load = t_int + self.min_loadtime_offset
+                        time_to_load = t_int + int(self.min_loadtime_offset*1e6)
                         sideband = self.source_pointings_dict['sideband']
                         sslo = self.source_pointings_dict['sslo']
                     
@@ -269,7 +270,7 @@ class DelayModel(threading.Thread):
                         loadtime_from_now > self.max_loadtime_offset):
                         #loadtime for source pointing is too far in the future or is in the past. Use current pointings on hand and set loadtime to 
                         #self.min_loadtime_offset from now.
-                        time_to_load = t_int + self.min_loadtime_offset
+                        time_to_load = t_int + int(self.min_loadtime_offset*1e6)
 
                     elif(loadtime_from_now >= self.min_loadtime_offset
                         and
@@ -326,6 +327,7 @@ class DelayModel(threading.Thread):
                 if publish:
                     self.publish_delays()
                 else:
+                    self.last_sent_timestamp = time.time()
                     return pd.DataFrame(self.delay_data, index=list(self.itrf.index.values)).to_dict('index')
                       
             time.sleep(1e-1)
@@ -343,6 +345,7 @@ class DelayModel(threading.Thread):
                 delays["lo_hz"] = configure.order_lo_dict_values(self.antname_lo_fshift_dict[ant])
             delay_dict[ant] = delays
             redis_publish_dict_to_channel(self.redis_obj, f"{ant}_delays", delays)
+        self.last_sent_timestamp = time.time()
         delay_dict['deg_ra'] = self.source.ra.deg
         delay_dict['deg_dec'] = self.source.dec.deg
         redis_publish_dict_to_hash(self.redis_obj, "META_modelDelays", delay_dict)
