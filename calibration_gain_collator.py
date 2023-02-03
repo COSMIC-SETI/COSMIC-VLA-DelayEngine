@@ -11,6 +11,7 @@ import json
 from delaycalibration import DelayCalibrationWriter
 from textwrap import dedent
 import pprint
+from calibration_residual_kernals import calc_residuals_from_polyfit, calc_residuals_from_ifft
 from cosmic.observations.slackbot import SlackBot
 from cosmic.fengines import ant_remotefeng_map
 from cosmic.redis_actions import redis_obj, redis_hget_keyvalues, redis_publish_dict_to_hash, redis_clear_hash_contents, redis_publish_service_pulse, redis_publish_dict_to_channel
@@ -49,7 +50,7 @@ GPU_GAINS_REDIS_CHANNEL = "gpu_calibrationgains"
 CALIBRATION_CACHE_HASH = "CAL_fixedValuePaths"
 
 class CalibrationGainCollector():
-    def __init__(self, redis_obj, fixed_delay_csv, fixed_phase_json, hash_timeout=20, re_arm_time = 30, dry_run = False, no_phase_cal = False,
+    def __init__(self, redis_obj, fixed_delay_csv, fixed_phase_json, hash_timeout=20, re_arm_time = 30, fit_method = "linear", dry_run = False, no_phase_cal = False,
     nof_streams = 4, nof_tunings = 2, nof_pols = 2, nof_channels = 1024, slackbot=None):
         self.redis_obj = redis_obj
         self.fixed_delay_csv = fixed_delay_csv
@@ -58,6 +59,7 @@ class CalibrationGainCollector():
         redis_publish_dict_to_hash(self.redis_obj, CALIBRATION_CACHE_HASH,{"fixed_phase":fixed_phase_json})
         self.hash_timeout = hash_timeout
         self.re_arm_time = re_arm_time
+        self.fit_method = fit_method
         self.dry_run = dry_run
         self.no_phase_cal = no_phase_cal
         self.slackbot = slackbot
@@ -197,69 +199,24 @@ class CalibrationGainCollector():
         
         return ant_tune_to_collected_gain, collected_frequencies, ants, obs_id
 
-    def calc_residual_delays_and_phases(self, ant_tune_to_collected_gains, collected_frequencies):
-        """
-        Taking all the concatenated phases and frequencies, use a fit of values to determine
-        the residual delays and phases.
-
-        Args: 
-            ant_tune_to_collected_gains : {<ant>_<tune_index> : [[complex(gains_pol0)], [complex(gains_pol1)]], ...}
-            collected frequency dict of {tune: [n_collected_freqs], ...}
-
-        Return:
-            delay_residual_map : {<ant>_<tune_index> : [[residual_delay_pol0],[residual_delay_pol1]]}, ...} in nanoseconds
-            phase_residual_map : {<ant>_<tune_index> : [[residual_phase_pol0],[residual_phase_pol1]]}, ...} in radians
-        """
-        delay_residual_map = {}
-        phase_residual_map = {} 
-        amp_map = {} 
-
-        for ant_tune, gain_matrix in ant_tune_to_collected_gains.items():
-            tune = ant_tune.split('_')[1]
-            tune = int(tune)
-            residual_delays = np.zeros(self.nof_pols)
-            residual_phases = np.zeros((self.nof_pols,len(collected_frequencies[tune])))
-            
-            #If there are values present in the gain matrix:
-            if any(gain_matrix):
-                gain_matrix = np.array(gain_matrix,dtype=np.complex64)
-                t_col_frequencies = np.array(collected_frequencies[tune],dtype = float)
-
-                phase_matrix = np.angle(gain_matrix)
-
-                for pol in range(self.nof_pols):
-                    unwrapped_phases = np.unwrap(phase_matrix[pol,:])
-                    phase_slope, _ = np.polyfit(t_col_frequencies, unwrapped_phases, 1)
-                    residual = unwrapped_phases - (phase_slope * t_col_frequencies)
-                    residual_delays[pol] = (phase_slope / (2*np.pi)) * 1e9
-                    residual_phases[pol,:] = residual % (2*np.pi)
-
-                amp_map[ant_tune] = np.mean(np.abs(gain_matrix),axis=1)
-
-            delay_residual_map[ant_tune] = residual_delays
-            phase_residual_map[ant_tune] = residual_phases
-
-        return delay_residual_map, phase_residual_map, amp_map
-
-    def correctly_place_residual_phases_and_delays(self, residual_phases, residual_delays, 
+    def correctly_place_residual_phases_and_delays(self, ant_tune_to_collected_gain, 
         collected_frequencies, full_observation_channel_frequencies):
         """
         By investigating the placement of `collected_frequencies` inside of `full_observation_channel_frequencies_hz`,
-        a map of how to place the calculated `residual_phases` inside an array of `self.nof_channels` per stream per antenna
+        a map of how to place the collected gains inside an array of `self.nof_channels` per stream per antenna
         may be generated.
 
         Args:
-            residual_phases: a dictionary mapping of {<ant>_<tune_index> : [phase_residual]}, ...}
-            residual_delays: a dictionary mapping of {<ant>_<tune_index> : [delay_residual]}, ...}
+            ant_tune_to_collected_gain : {<ant>_<tune_index> : [[complex(gains_pol0)], [complex(gains_pol1)]], ...}
             collected_frequences: collected frequency dict of {tune: [n_collected_freqs], ...}
             full_observation_channel_frequencies_hz: a matrix of dims(nof_tunings, nof_channels)
 
         Returns:
-            full_residual_phase_map : a dictionary mapping of {ant: [nof_streams, nof_frequencies]} in radians
-            full_residual_delay_map : a dictionary mapping of {ant: [nof_streams, 1]} in nanoseconds
+            ant_gains_map : a dictionary mapping of {ant: [nof_streams, nof_frequencies]}
+            chan_start : integer index for the start frequency of those collected out of all observation channel frequencies
+            chan_stop : integer index for the stop frequency of those collected out of all observation channel frequencies
         """
-        full_residual_phase_map = {}
-        full_residual_delay_map = {}
+        full_gains_map = {}
         sortings = {}
         frequency_indices = {}
 
@@ -296,27 +253,23 @@ class CalibrationGainCollector():
         log_message += "\n-------------------------------------------------------------"
         self.log_and_post_slackmessage(log_message, severity="INFO")
 
-        #Initialise full_residual_phase_map and full_residual_delay_map
-        phase_zeros = np.zeros((self.nof_streams, self.nof_channels))
-        delay_zeros = np.zeros(self.nof_streams)
+        #Initialise full ant_gains_map
+        gain_zeros = np.zeros((self.nof_streams, self.nof_channels),dtype=np.complex64)
         for ant in self.ants:
-            full_residual_delay_map[ant] = delay_zeros.copy()
-            full_residual_phase_map[ant] = phase_zeros.copy()
+            full_gains_map[ant] = gain_zeros.copy()
 
-        #sort phases according to sorting of frequencies, and place them in nof_chan array correctly
-        for ant_tune, phases in residual_phases.items():
+        #sort gains according to sorting of frequencies, and place them in nof_chan array correctly
+        for ant_tune, gains in ant_tune_to_collected_gain.items():
+            gains = np.array(gains,dtype=np.complex64)
             ant, tune = ant_tune.split('_')
             tune = int(tune)
-
             #per antenna, per tuning
-            sorted_phases = phases[:,sortings[tune]]
+            sorted_gains = gains[:,sortings[tune]]
 
-            full_residual_phase_map[ant][tune*2, frequency_indices[tune]] = sorted_phases[0]
-            full_residual_phase_map[ant][(tune*2)+1, frequency_indices[tune]] = sorted_phases[1]
-            full_residual_delay_map[ant][tune*2] = residual_delays[ant_tune][0]
-            full_residual_delay_map[ant][(tune*2)+1] = residual_delays[ant_tune][1]
+            full_gains_map[ant][tune*2, frequency_indices[tune]] = sorted_gains[0]
+            full_gains_map[ant][(tune*2)+1, frequency_indices[tune]] = sorted_gains[1]
 
-        return full_residual_phase_map, full_residual_delay_map
+        return full_gains_map, frequency_indices
 
     def start(self):
         while True:
@@ -363,16 +316,6 @@ class CalibrationGainCollector():
                     `fcents = {fcent_mhz} MHz`
                     `tbin = {tbin}`""", severity = "INFO")
 
-                #calculate residual delays/phases for the collected frequencies
-                delay_residual_map, phase_residual_map, amp_map = self.calc_residual_delays_and_phases(ant_tune_to_collected_gains, collected_frequencies)
-
-                self.log_and_post_slackmessage(f"""
-                Phases collected from the GPU nodes for observation:
-                `{obs_id}`
-                have mean amplitudes per <ant_tuning> of:
-                ```{pprint.pformat(json.dumps(self.dictnpy_to_dictlist(amp_map))).replace("'", '"')}```
-                """,severity="INFO")
-
                 full_observation_channel_frequencies_hz = np.vstack((
                     np.arange(fcent_hz[0] - (self.nof_channels//2)*channel_bw,
                     fcent_hz[0] + (self.nof_channels//2)*channel_bw, channel_bw ),
@@ -380,14 +323,20 @@ class CalibrationGainCollector():
                     fcent_hz[1] + (self.nof_channels//2)*channel_bw, channel_bw )
                 ))
 
-                full_residual_phase_map, full_residual_delay_map = self.correctly_place_residual_phases_and_delays(
-                    phase_residual_map, delay_residual_map, collected_frequencies, 
+                full_gains_map, frequency_indices = self.correctly_place_residual_phases_and_delays(
+                    ant_tune_to_collected_gains, collected_frequencies, 
                     full_observation_channel_frequencies_hz
                 )
 
+                #calculate residual delays/phases for the collected frequencies
+                if self.fit_method == "linear":
+                    delay_residual_map, phase_residual_map = calc_residuals_from_polyfit(full_gains_map, full_observation_channel_frequencies_hz,frequency_indices)
+                elif self.fit_method == "fourier":
+                    delay_residual_map, phase_residual_map = calc_residuals_from_ifft(full_gains_map,full_observation_channel_frequencies_hz)
+
                 #For json dumping:
-                t_delay_dict = self.dictnpy_to_dictlist(full_residual_delay_map)
-                t_phase_dict = self.dictnpy_to_dictlist(full_residual_phase_map)
+                t_delay_dict = self.dictnpy_to_dictlist(delay_residual_map)
+                t_phase_dict = self.dictnpy_to_dictlist(phase_residual_map)
 
                 #Save residual delays
                 delay_filename = os.path.join(CALIBRATION_LOG_DIR,f"calibrationdelayresiduals_{obs_id}.json")
@@ -435,8 +384,8 @@ class CalibrationGainCollector():
                         """)
                         updated_fixed_phases = {}
                         for ant, phases in fixed_phases.items():
-                            if ant in full_residual_phase_map:
-                                updated_fixed_phases[ant] = (np.array(phases,dtype=float) + full_residual_phase_map[ant]).tolist()
+                            if ant in phase_residual_map:
+                                updated_fixed_phases[ant] = (np.array(phases,dtype=float) + phase_residual_map[ant]).tolist()
                             else:
                                 updated_fixed_phases[ant] = phases
 
@@ -486,8 +435,8 @@ class CalibrationGainCollector():
                     for i, tune in enumerate(list(fixed_delays.keys())):
                         sub_updated_fixed_delays = {}
                         for ant, delay in fixed_delays[tune].items():
-                            if ant in full_residual_delay_map:
-                                sub_updated_fixed_delays[ant] = delay - full_residual_delay_map[ant][i]
+                            if ant in delay_residual_map:
+                                sub_updated_fixed_delays[ant] = delay - delay_residual_map[ant][i]
                             else:
                                 sub_updated_fixed_delays[ant] = delay
                         updated_fixed_delays[tune] = sub_updated_fixed_delays
@@ -524,7 +473,7 @@ class CalibrationGainCollector():
 
                 #Generate plots and save/publish them:
 
-                delay_file_path, phase_file_path = plot_delay_phase(full_residual_delay_map,full_residual_phase_map, 
+                delay_file_path, phase_file_path = plot_delay_phase(delay_residual_map,phase_residual_map, 
                         full_observation_channel_frequencies_hz,outdir = CALIBRATION_LOG_DIR, outfilestem=obs_id)
 
                 self.log_and_post_slackmessage(f"""
@@ -567,6 +516,8 @@ if __name__ == "__main__":
     calcualted and written to redis/file but not loaded to the F-Engines nor applied to the existing fixed-delays.""")
     parser.add_argument("--re-arm-time", type=float, default=20, required=False, help="""After collecting phases
     from GPU nodes and performing necessary actions, the service will sleep for this duration until re-arming""")
+    parser.add_argument("--fit-method", type=str, default="linear", required=False, help="""Pick the complex fitting method
+    to use for residual calculation. Options are: ["linear", "fourier"]""")
     parser.add_argument("--no-phase-cal", action="store_true", help="""If specified, only residual delays are updated and no
     phase calibrations are applied.""")
     parser.add_argument("-f","--fixed-delay-to-update", type=str, required=False, help="""
@@ -607,5 +558,5 @@ if __name__ == "__main__":
 
     calibrationGainCollector = CalibrationGainCollector(redis_obj, fixed_delay_csv = fixed_delay_path, fixed_phase_json = fixed_phase_path,
                                 hash_timeout = args.hash_timeout, dry_run = args.dry_run, no_phase_cal = args.no_phase_cal,
-                                re_arm_time = args.re_arm_time, slackbot = slackbot)
+                                re_arm_time = args.re_arm_time, fit_method = args.fit_method, slackbot = slackbot)
     calibrationGainCollector.start()
