@@ -8,7 +8,7 @@ def calc_residuals_from_polyfit(ant_to_gains, observation_frequencies, frequency
 
         Args: 
             ant_to_gains : {<ant> : [[complex(gains_pol0_tune0)], [complex(gains_pol1_tune0)], [complex(gains_pol0_tune1)], [complex(gains_pol1_tune1)]], ...}
-            observation_frequencies : list of dimension (n_tunings, nchans)
+            observation_frequencies : list of dimension (n_tunings, nchans) in Hz
             frequency_indices : indices of the collected gains in the full n_chans per tuning
 
         Return:
@@ -54,7 +54,7 @@ def calc_residuals_from_ifft(ant_to_gains, observation_frequencies):
 
     Args:
         ant_to_gains : {<ant> : [[complex(gains_pol0_tune0)], [complex(gains_pol1_tune0)], [complex(gains_pol0_tune1)], [complex(gains_pol1_tune1)]], ...}
-        observation_frequencies : list of dimension (n_tunings, nchans)
+        observation_frequencies : list of dimension (n_tunings, nchans) in Hz
     Return:
         delay_residual_map : {<ant> : [[residual_delay_pol0_tune0], [residual_delay_pol1_tune0], [residual_delay_pol0_tune1], [residual_delay_pol1_tune1]]}, ...} in nanoseconds
         phase_residual_map : {<ant>_<tune_index> : [[residual_phase_pol0],[residual_phase_pol1]]}, ...} in radians
@@ -74,12 +74,13 @@ def calc_residuals_from_ifft(ant_to_gains, observation_frequencies):
 
         for tune in range(nof_tunings):
             chan_width = observation_frequencies[tune,1] - observation_frequencies[tune,0]
-            tlags = np.fft.fftfreq(nof_chan, chan_width)*1e9
+            freqs = np.fft.fftfreq(nof_chan, chan_width)
+            tlags = freqs*1e9
             for pol in range(nof_pols):   #probably unecessary - could do with some matrix mult stuff
                 #some binary logic
                 stream_idx = int(str(tune)+str(pol),2)
                 residual_delays[stream_idx] = -1.0 * tlags[max_idxs[stream_idx]]
-                gain_from_residual_delay = np.exp(1j*np.pi*observation_frequencies[tune,:]*residual_delays[stream_idx])
+                gain_from_residual_delay = np.exp(2j*np.pi*freqs*residual_delays[stream_idx])
                 residual_phases[stream_idx] = np.angle(gain_matrix[stream_idx,:]/gain_from_residual_delay)
 
         delay_residual_map[ant] = residual_delays
