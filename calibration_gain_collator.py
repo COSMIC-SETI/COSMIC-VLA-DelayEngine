@@ -278,8 +278,9 @@ class CalibrationGainCollector():
             if trigger:
                 self.log_and_post_slackmessage(f"""
                     Calibration process has been triggered.\n
-                    Dry run = {self.dry_run}, applying phase calibrations = {not self.no_phase_cal},
-                    hash timeout = {self.hash_timeout}s and re-arm time = {self.re_arm_time}s""", severity = "INFO")
+                    Dry run = `{self.dry_run}`, applying phase calibrations = `{not self.no_phase_cal}`,
+                    hash timeout = `{self.hash_timeout}`s, re-arm time = `{self.re_arm_time}`s
+                    and fitting method = `{self.fit_method}`""", severity = "INFO")
 
                 #FOR SPOOFING - TEMPORARY AND NEEDS TO BE SMARTER:
                 self.basebands = [
@@ -364,112 +365,107 @@ class CalibrationGainCollector():
                     json.dump(t_phase_dict, f)
                 redis_publish_dict_to_hash(self.redis_obj, "META_residualPhases",t_phase_dict)
                 
-                #In the event of a wet run, we want to update fixed delays as well as load phase calibrations to the F-Engines
-                if not self.dry_run:
-                     # update phases
-                    if not self.no_phase_cal:
-                        try:
-                            with open(self.fixed_phase_json, 'r') as f:
-                                fixed_phases = json.load(f)
-                        except:
-                            self.log_and_post_slackmessage(f"""
-                                Could *not* read fixed phases from {self.fixed_phase_json} for updating with calculated residuals.
-                                Clearning up and aborting calibration process...
-                            """, severity = "ERROR")
-                            return
-                        self.log_and_post_slackmessage(f"""
-                        Modifying fixed-phases found in
-                        ```{self.fixed_phase_json}```
-                        with the *residual phases* calculated.
-                        """)
-                        updated_fixed_phases = {}
-                        for ant, phases in fixed_phases.items():
-                            if ant in phase_residual_map:
-                                updated_fixed_phases[ant] = (np.array(phases,dtype=float) + phase_residual_map[ant]).tolist()
-                            else:
-                                updated_fixed_phases[ant] = phases
-
-                        #bit of logic here to remove the previous filestem from the name.
-                        if '%' in self.fixed_phase_json:
-                            modified_fixed_phases_path = os.path.join(CALIBRATION_LOG_DIR+os.path.splitext(os.path.basename(self.fixed_phase_json))[0].split('%')[1]+"%"+obs_id+".json")                    
-                        #if first time running
-                        else:
-                            modified_fixed_phases_path = os.path.join(CALIBRATION_LOG_DIR+os.path.splitext(os.path.basename(self.fixed_phase_json))[0]+"%"+obs_id+".json" )
-
-                        self.log_and_post_slackmessage(f"""
-                        Wrote out modified fixed phases to: 
-                        ```{modified_fixed_phases_path}```
-                        Updating fixed-phases on *all* antenna now...""", severity = "INFO")
-
-                        self.update_antenna_phascals(updated_fixed_phases)
-                        with open(modified_fixed_phases_path, 'w+') as f:
-                            json.dump(updated_fixed_phases, f)
-
-                        redis_publish_dict_to_hash(self.redis_obj, CALIBRATION_CACHE_HASH,{"fixed_phase":modified_fixed_phases_path})
-                        #Overwrite the json path to the new json path for modification in the next run
-                        self.fixed_phase_json = modified_fixed_phases_path
-
-                    else:
-                        self.log_and_post_slackmessage(f"""
-                            Calibration process was run with argument no-phase-cal = {self.no_phase_cal}. 
-                            Fixed delays *will* be updated with delay residuals but phase calibration values *will not* be written to FPGA's.
-                        """, severity = "INFO")
-
-                    # update fixed_delays
+                # update phases
+                if not self.no_phase_cal:
                     try:
-                        fixed_delays = pd.read_csv(os.path.abspath(self.fixed_delay_csv), names = ["IF0","IF1","IF2","IF3"],
-                                header=None, skiprows=1)
+                        with open(self.fixed_phase_json, 'r') as f:
+                            fixed_phases = json.load(f)
                     except:
                         self.log_and_post_slackmessage(f"""
-                            Could *not* read fixed delays from {self.fixed_delay_csv} for updating with calculated residuals.
+                            Could *not* read fixed phases from {self.fixed_phase_json} for updating with calculated residuals.
                             Clearning up and aborting calibration process...
                         """, severity = "ERROR")
                         return
                     self.log_and_post_slackmessage(f"""
-                    Modifying fixed-delays found in
-                    ```{self.fixed_delay_csv}```
-                    with the *residual delays* calculated above.
+                    Modifying fixed-phases found in
+                    ```{self.fixed_phase_json}```
+                    with the *residual phases* calculated.
                     """)
-                    fixed_delays = fixed_delays.to_dict()
-                    updated_fixed_delays = {}
-                    for i, tune in enumerate(list(fixed_delays.keys())):
-                        sub_updated_fixed_delays = {}
-                        for ant, delay in fixed_delays[tune].items():
-                            if ant in delay_residual_map:
-                                sub_updated_fixed_delays[ant] = delay - delay_residual_map[ant][i]
-                            else:
-                                sub_updated_fixed_delays[ant] = delay
-                        updated_fixed_delays[tune] = sub_updated_fixed_delays
+                    updated_fixed_phases = {}
+                    for ant, phases in fixed_phases.items():
+                        if ant in phase_residual_map:
+                            updated_fixed_phases[ant] = (np.array(phases,dtype=float) + phase_residual_map[ant]).tolist()
+                        else:
+                            updated_fixed_phases[ant] = phases
 
                     #bit of logic here to remove the previous filestem from the name.
-                    if '%' in self.fixed_delay_csv:
-                        modified_fixed_delays_path = os.path.join(CALIBRATION_LOG_DIR+os.path.splitext(os.path.basename(self.fixed_delay_csv))[0].split('%')[1]+"%"+obs_id+".csv")                    
+                    if '%' in self.fixed_phase_json:
+                        modified_fixed_phases_path = os.path.join(CALIBRATION_LOG_DIR+os.path.splitext(os.path.basename(self.fixed_phase_json))[0].split('%')[1]+"%"+obs_id+".json")                    
                     #if first time running
                     else:
-                        modified_fixed_delays_path = os.path.join(CALIBRATION_LOG_DIR+os.path.splitext(os.path.basename(self.fixed_delay_csv))[0]+"%"+obs_id+".csv" )
-                    
+                        modified_fixed_phases_path = os.path.join(CALIBRATION_LOG_DIR+os.path.splitext(os.path.basename(self.fixed_phase_json))[0]+"%"+obs_id+".json" )
+
                     self.log_and_post_slackmessage(f"""
-                        Wrote out modified fixed delays to: 
-                        ```{modified_fixed_delays_path}```
-                        Updating fixed-delays on *all* antenna now...""", severity = "INFO")
+                    Wrote out modified fixed phases to: 
+                    ```{modified_fixed_phases_path}```""", severity = "INFO")
 
-                    df = pd.DataFrame.from_dict(updated_fixed_delays)
-                    df.to_csv(modified_fixed_delays_path)
+                    if not self.dry_run:
+                        self.log_and_post_slackmessage("""Updating fixed-phases on *all* antenna now...""", severity = "INFO")
+                        self.update_antenna_phascals(updated_fixed_phases)
+                    
+                    with open(modified_fixed_phases_path, 'w+') as f:
+                        json.dump(updated_fixed_phases, f)
 
-                    #Publish new fixed delays to FEngines:
+                    redis_publish_dict_to_hash(self.redis_obj, CALIBRATION_CACHE_HASH,{"fixed_phase":modified_fixed_phases_path})
+                    #Overwrite the json path to the new json path for modification in the next run
+                    self.fixed_phase_json = modified_fixed_phases_path
+
+                else:
+                    self.log_and_post_slackmessage(f"""
+                        Calibration process was run with argument no-phase-cal = {self.no_phase_cal}. 
+                        Fixed delays *will* be updated with delay residuals but phase calibration values *will not* be written to FPGA's.
+                    """, severity = "INFO")
+
+                # update fixed_delays
+                try:
+                    fixed_delays = pd.read_csv(os.path.abspath(self.fixed_delay_csv), names = ["IF0","IF1","IF2","IF3"],
+                            header=None, skiprows=1)
+                except:
+                    self.log_and_post_slackmessage(f"""
+                        Could *not* read fixed delays from {self.fixed_delay_csv} for updating with calculated residuals.
+                        Clearning up and aborting calibration process...
+                    """, severity = "ERROR")
+                    return
+                self.log_and_post_slackmessage(f"""
+                Modifying fixed-delays found in
+                ```{self.fixed_delay_csv}```
+                with the *residual delays* calculated above.
+                """)
+                fixed_delays = fixed_delays.to_dict()
+                updated_fixed_delays = {}
+                for i, tune in enumerate(list(fixed_delays.keys())):
+                    sub_updated_fixed_delays = {}
+                    for ant, delay in fixed_delays[tune].items():
+                        if ant in delay_residual_map:
+                            sub_updated_fixed_delays[ant] = delay - delay_residual_map[ant][i]
+                        else:
+                            sub_updated_fixed_delays[ant] = delay
+                    updated_fixed_delays[tune] = sub_updated_fixed_delays
+
+                #bit of logic here to remove the previous filestem from the name.
+                if '%' in self.fixed_delay_csv:
+                    modified_fixed_delays_path = os.path.join(CALIBRATION_LOG_DIR+os.path.splitext(os.path.basename(self.fixed_delay_csv))[0].split('%')[1]+"%"+obs_id+".csv")                    
+                #if first time running
+                else:
+                    modified_fixed_delays_path = os.path.join(CALIBRATION_LOG_DIR+os.path.splitext(os.path.basename(self.fixed_delay_csv))[0]+"%"+obs_id+".csv" )
+                
+                self.log_and_post_slackmessage(f"""
+                    Wrote out modified fixed delays to: 
+                    ```{modified_fixed_delays_path}```
+                    Updating fixed-delays on *all* antenna now...""", severity = "INFO")
+
+                df = pd.DataFrame.from_dict(updated_fixed_delays)
+                df.to_csv(modified_fixed_delays_path)
+
+                #Publish new fixed delays to FEngines:
+                if not self.dry_run:
+                    self.log_and_post_slackmessage("""Updating fixed-delays on *all* antenna now...""", severity = "INFO")
                     self.delay_calibration.calib_csv = modified_fixed_delays_path
                     self.delay_calibration.run()
 
-                    redis_publish_dict_to_hash(self.redis_obj, CALIBRATION_CACHE_HASH,{"fixed_delay":modified_fixed_delays_path})
-                    #Overwrite the csv path to the new csv path for modification in the next run
-                    self.fixed_delay_csv = modified_fixed_delays_path
-                
-                else:
-                    self.log_and_post_slackmessage("""
-                        Calibration process is running in *dry-mode*. 
-                        Fixed delays are *not* updated with delay residuals and 
-                        phase calibration values are *not* written to FPGA's.
-                    """, severity = "INFO")
+                redis_publish_dict_to_hash(self.redis_obj, CALIBRATION_CACHE_HASH,{"fixed_delay":modified_fixed_delays_path})
+                #Overwrite the csv path to the new csv path for modification in the next run
+                self.fixed_delay_csv = modified_fixed_delays_path
 
                 #Generate plots and save/publish them:
 
@@ -554,7 +550,6 @@ if __name__ == "__main__":
 
     fixed_delay_path = args.fixed_delay_to_update if args.fixed_delay_to_update is not None else fixed_delay_path
     fixed_phase_path = args.fixed_phase_to_update if args.fixed_phase_to_update is not None else fixed_phase_path
-
 
     calibrationGainCollector = CalibrationGainCollector(redis_obj, fixed_delay_csv = fixed_delay_path, fixed_phase_json = fixed_phase_path,
                                 hash_timeout = args.hash_timeout, dry_run = args.dry_run, no_phase_cal = args.no_phase_cal,
