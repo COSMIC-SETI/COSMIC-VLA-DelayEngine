@@ -79,8 +79,8 @@ def calc_residuals_from_ifft(ant_to_gains, observation_frequencies):
                 #some binary logic
                 stream_idx = int(str(tune)+str(pol),2)
                 residual_delays[stream_idx] = -1.0 * tlags[max_idxs[stream_idx]]
-                gain_from_residual_delay = np.exp(2*1j*np.pi*observation_frequencies*residual_delays[stream_idx])
-                residual_phase = np.angle(gain_matrix[stream_idx]/gain_from_residual_delay)
+                gain_from_residual_delay = np.exp(1j*np.pi*observation_frequencies[tune,:]*residual_delays[stream_idx])
+                residual_phases[stream_idx] = np.angle(gain_matrix[stream_idx,:]/gain_from_residual_delay)
 
         delay_residual_map[ant] = residual_delays
         phase_residual_map[ant] = residual_phases
