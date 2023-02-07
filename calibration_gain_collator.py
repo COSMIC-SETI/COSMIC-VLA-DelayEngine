@@ -18,7 +18,6 @@ from cosmic.redis_actions import redis_obj, redis_hget_keyvalues, redis_publish_
 from plot_delay_phase import plot_delay_phase
 
 LOGFILENAME = "/home/cosmic/logs/DelayCalibration.log"
-CALIBRATION_LOG_DIR = "/home/cosmic/dev/logs/calibration_logs/"
 OBS_LOG_DIR = "/home/cosmic/dev/logs/obs_meta/"
 logger = logging.getLogger('calibration_delays')
 logger.setLevel(logging.DEBUG)
@@ -294,8 +293,10 @@ class CalibrationGainCollector():
             #Launch function that waits for first valid message:
             if self.input_json_dict is None:
                 trigger = self.await_trigger()
+                CALIBRATION_LOG_DIR = "/home/cosmic/dev/logs/calibration_logs/"
             else:
                 #in this case, the operation is running manually with input json files
+                CALIBRATION_LOG_DIR = "./manual_calibration_outputs/"
                 manual_operation = True
                 trigger = True
             if trigger:
@@ -352,6 +353,10 @@ class CalibrationGainCollector():
                 #For json dumping:
                 t_delay_dict = self.dictnpy_to_dictlist(delay_residual_map)
                 t_phase_dict = self.dictnpy_to_dictlist(phase_residual_map)
+
+                #Check log director exists, else create it:
+                if not os.path.exists(CALIBRATION_LOG_DIR):
+                    os.makedirs(CALIBRATION_LOG_DIR)
 
                 #Save residual delays
                 delay_filename = os.path.join(CALIBRATION_LOG_DIR,f"calibrationdelayresiduals_{obs_id}.json")
@@ -459,7 +464,7 @@ class CalibrationGainCollector():
                 self.log_and_post_slackmessage(f"""
                     Wrote out modified fixed delays to: 
                     ```{modified_fixed_delays_path}```
-                    Updating fixed-delays on *all* antenna now...""", severity = "INFO")
+                    """, severity = "INFO")
 
                 df = pd.DataFrame.from_dict(updated_fixed_delays)
                 df.to_csv(modified_fixed_delays_path)
