@@ -50,8 +50,8 @@ GPU_GAINS_REDIS_CHANNEL = "gpu_calibrationgains"
 CALIBRATION_CACHE_HASH = "CAL_fixedValuePaths"
 
 class CalibrationGainCollector():
-    def __init__(self, redis_obj, fixed_delay_csv, fixed_phase_json, hash_timeout=20, re_arm_time = 30, fit_method = "linear", dry_run = False, no_phase_cal = False,
-    nof_streams = 4, nof_tunings = 2, nof_pols = 2, nof_channels = 1024, slackbot=None):
+    def __init__(self, redis_obj, fixed_delay_csv, fixed_phase_json, hash_timeout=20, re_arm_time = 30, fit_method = "linear", dry_run = False,
+    nof_streams = 4, nof_tunings = 2, nof_pols = 2, nof_channels = 1024, slackbot=None, input_json_dict = None, input_fcents = None, input_tbin = None):
         self.redis_obj = redis_obj
         self.fixed_delay_csv = fixed_delay_csv
         redis_publish_dict_to_hash(self.redis_obj, CALIBRATION_CACHE_HASH,{"fixed_delay":fixed_delay_csv})
@@ -61,12 +61,15 @@ class CalibrationGainCollector():
         self.re_arm_time = re_arm_time
         self.fit_method = fit_method
         self.dry_run = dry_run
-        self.no_phase_cal = no_phase_cal
         self.slackbot = slackbot
+        self.input_json_dict = input_json_dict
+        self.fcents = input_fcents
+        self.tbin = input_tbin
         self.nof_streams = nof_streams
         self.nof_channels = nof_channels
         self.nof_tunings = nof_tunings
         self.nof_pols = nof_pols
+        self.meta_obs = redis_hget_keyvalues(self.redis_obj, "META")
         self.ant_feng_map = ant_remotefeng_map.get_antennaFengineDict(self.redis_obj)
         if not self.dry_run:
             #Publish the initial fixed delays and trigger the F-Engines to load them
@@ -129,38 +132,52 @@ class CalibrationGainCollector():
                 channel to listen for changes to {GPU_GAINS_REDIS_HASH}.""",
             severity="ERROR")
             return False
-        self.log_and_post_slackmessage("Calibration process is armed and awaiting triggers from GPU nodes.", severity="INFO")
-        while True:
-            redis_publish_service_pulse(self.redis_obj, SERVICE_NAME)
-            #Listen for first message on subscribed channels - ignoring None
-            message = pubsub.get_message(timeout=0.1)
-            if message and "message" == message["type"]:
-                #Get the bool data published on the first publication to that channel
-                trigger = json.loads(message.get('data'))
-                #fetch and calculate needed metadata:
-                if trigger is not None:
-                    return trigger
-                else:
-                    continue
+        try:
+            pubsub.subscribe("observations")
+        except:
+            self.log_and_post_slackmessage(f'Subscription to "observations" unsuccessful.',severity = "ERROR")
 
-    def collect_phases_for_hash_timeout(self, time_to_wait_until):
+        self.log_and_post_slackmessage("Calibration process is armed and awaiting triggers from GPU nodes.", severity="INFO")
+
+        for message in pubsub.listen():
+            redis_publish_service_pulse(self.redis_obj, SERVICE_NAME)
+            if message is not None and isinstance(message, dict):
+                msg = json.loads(message.get('data'))
+                if message['channel'] == "observations":
+                    if msg['postprocess'] == "calibrate-uvh5":
+                        self.log_and_post_slackmessage(f"""
+                        Received message indicating calibration observation is starting.
+                        Collected mcast metadata now...""", severity = "INFO")
+                        self.meta_obs = redis_hget_keyvalues(self.redis_obj, "META")
+                        continue
+                if message['channel'] == GPU_GAINS_REDIS_CHANNEL:
+                    if msg is not None:
+                        return msg
+                    else:
+                        continue
+
+    def collect_phases_for_hash_timeout(self, time_to_wait_until, manual_operation):
         """
         This function waits till time_to_wait expires, then collects GPU_calibrationGains,
         and processes hash contents.
 
         Args:
             time_to_wait_until : float, Unix time for the loop to wait until.
+            manual_operation : boolean, dictates whether this is a manual run and self.input_json_dict is populated
+                                        rather than fetching from Redis.
         Returns:
             - {<ant>_<tune_index> : [[complex(gains_pol0)], [complex(gains_pol1)]], ...}
             - collected frequency dict of {tune: [n_collected_freqs], ...}
             - list[antnames in observation]
             - obs_id of observation used for received gains
         """
-        time.sleep(time_to_wait_until)
+        if manual_operation:
+            calibration_gains = self.input_json_dict
+        else:
+            calibration_gains = redis_hget_keyvalues(self.redis_obj, GPU_GAINS_REDIS_HASH)
+            time.sleep(time_to_wait_until)
 
         obs_id = None
-
-        calibration_gains = redis_hget_keyvalues(self.redis_obj, GPU_GAINS_REDIS_HASH)
 
         #Which antenna have been provided - assume unchanging given timeout expired
         ants = list(calibration_gains[list(calibration_gains.keys())[0]]['gains'].keys())
@@ -273,12 +290,19 @@ class CalibrationGainCollector():
 
     def start(self):
         while True:
+            manual_operation = False
             #Launch function that waits for first valid message:
-            trigger = self.await_trigger()
+            if self.input_json_dict is None:
+                trigger = self.await_trigger()
+            else:
+                #in this case, the operation is running manually with input json files
+                manual_operation = True
+                trigger = True
             if trigger:
                 self.log_and_post_slackmessage(f"""
                     Calibration process has been triggered.\n
-                    Dry run = `{self.dry_run}`, applying phase calibrations = `{not self.no_phase_cal}`,
+                    Manual run = `{manual_operation}`, 
+                    Dry run = `{self.dry_run}`,
                     hash timeout = `{self.hash_timeout}`s, re-arm time = `{self.re_arm_time}`s
                     and fitting method = `{self.fit_method}`""", severity = "INFO")
 
@@ -289,32 +313,25 @@ class CalibrationGainCollector():
                     ]
 
                 #Start function that waits for hash_timeout before collecting redis hash.
-                ant_tune_to_collected_gains, collected_frequencies, self.ants, obs_id = self.collect_phases_for_hash_timeout(self.hash_timeout) 
+                ant_tune_to_collected_gains, collected_frequencies, self.ants, obs_id = self.collect_phases_for_hash_timeout(self.hash_timeout, manual_operation = manual_operation) 
 
-                #FOR SPOOFING - TEMPORARY AND NEEDS TO BE SMARTER:
-                obs_meta_file_path = (os.path.join(OBS_LOG_DIR,obs_id+"_AC_8BIT_metadata.json") if os.path.exists(os.path.join(OBS_LOG_DIR,obs_id+"_AC_8BIT_metadata.json"))
-                     else os.path.join(OBS_LOG_DIR,obs_id+"_BD_8BIT_metadata.json"))
+                if manual_operation:
+                    fcents_mhz = np.array([float(fcent) for fcent in self.fcents],dtype=float)
+                    tbin = float(self.tbin)
+                else:
+                    fcents_mhz = np.array(self.meta_obs["fcents"],dtype=float)
+                    tbin = self.meta_obs["tbin"]
 
-                try:
-                    with open(obs_meta_file_path) as f:
-                        metadata = json.load(f)["META"]
-                except:
-                    self.log_and_post_slackmessage(f"""
-                    Could not find any metadata logs corresponding to:
-                    {obs_id}.
-                    Cannot extract useful metadata required for calibration gain collation.
-                    """, severity ="ERROR")
-                    return
+                print(type(fcents_mhz))
+                print(fcents_mhz)
 
-                fcent_mhz = np.array(metadata['fcents'],dtype=float)
-                fcent_hz = np.array(fcent_mhz)*1e6
-                tbin = float(metadata['tbin'])
                 channel_bw = 1/tbin
+                fcent_hz = fcents_mhz*1e6
                 
                 self.log_and_post_slackmessage(f"""
                     Observation meta reports:
                     `basebands = {self.basebands}`
-                    `fcents = {fcent_mhz} MHz`
+                    `fcents = {fcents_mhz} MHz`
                     `tbin = {tbin}`""", severity = "INFO")
 
                 full_observation_channel_frequencies_hz = np.vstack((
@@ -366,55 +383,48 @@ class CalibrationGainCollector():
                 redis_publish_dict_to_hash(self.redis_obj, "META_residualPhases",t_phase_dict)
                 
                 # update phases
-                if not self.no_phase_cal:
-                    try:
-                        with open(self.fixed_phase_json, 'r') as f:
-                            fixed_phases = json.load(f)
-                    except:
-                        self.log_and_post_slackmessage(f"""
-                            Could *not* read fixed phases from {self.fixed_phase_json} for updating with calculated residuals.
-                            Clearning up and aborting calibration process...
-                        """, severity = "ERROR")
-                        return
+                try:
+                    with open(self.fixed_phase_json, 'r') as f:
+                        fixed_phases = json.load(f)
+                except:
                     self.log_and_post_slackmessage(f"""
-                    Modifying fixed-phases found in
-                    ```{self.fixed_phase_json}```
-                    with the *residual phases* calculated.
-                    """)
-                    updated_fixed_phases = {}
-                    for ant, phases in fixed_phases.items():
-                        if ant in phase_residual_map:
-                            updated_fixed_phases[ant] = (np.array(phases,dtype=float) + phase_residual_map[ant]).tolist()
-                        else:
-                            updated_fixed_phases[ant] = phases
-
-                    #bit of logic here to remove the previous filestem from the name.
-                    if '%' in self.fixed_phase_json:
-                        modified_fixed_phases_path = os.path.join(CALIBRATION_LOG_DIR+os.path.splitext(os.path.basename(self.fixed_phase_json))[0].split('%')[1]+"%"+obs_id+".json")                    
-                    #if first time running
+                        Could *not* read fixed phases from {self.fixed_phase_json} for updating with calculated residuals.
+                        Clearning up and aborting calibration process...
+                    """, severity = "ERROR")
+                    return
+                self.log_and_post_slackmessage(f"""
+                Modifying fixed-phases found in
+                ```{self.fixed_phase_json}```
+                with the *residual phases* calculated.
+                """)
+                updated_fixed_phases = {}
+                for ant, phases in fixed_phases.items():
+                    if ant in phase_residual_map:
+                        updated_fixed_phases[ant] = (np.array(phases,dtype=float) + phase_residual_map[ant]).tolist()
                     else:
-                        modified_fixed_phases_path = os.path.join(CALIBRATION_LOG_DIR+os.path.splitext(os.path.basename(self.fixed_phase_json))[0]+"%"+obs_id+".json" )
+                        updated_fixed_phases[ant] = phases
 
-                    self.log_and_post_slackmessage(f"""
-                    Wrote out modified fixed phases to: 
-                    ```{modified_fixed_phases_path}```""", severity = "INFO")
-
-                    if not self.dry_run:
-                        self.log_and_post_slackmessage("""Updating fixed-phases on *all* antenna now...""", severity = "INFO")
-                        self.update_antenna_phascals(updated_fixed_phases)
-                    
-                    with open(modified_fixed_phases_path, 'w+') as f:
-                        json.dump(updated_fixed_phases, f)
-
-                    redis_publish_dict_to_hash(self.redis_obj, CALIBRATION_CACHE_HASH,{"fixed_phase":modified_fixed_phases_path})
-                    #Overwrite the json path to the new json path for modification in the next run
-                    self.fixed_phase_json = modified_fixed_phases_path
-
+                #bit of logic here to remove the previous filestem from the name.
+                if '%' in self.fixed_phase_json:
+                    modified_fixed_phases_path = os.path.join(CALIBRATION_LOG_DIR+os.path.splitext(os.path.basename(self.fixed_phase_json))[0].split('%')[1]+"%"+obs_id+".json")                    
+                #if first time running
                 else:
-                    self.log_and_post_slackmessage(f"""
-                        Calibration process was run with argument no-phase-cal = {self.no_phase_cal}. 
-                        Fixed delays *will* be updated with delay residuals but phase calibration values *will not* be written to FPGA's.
-                    """, severity = "INFO")
+                    modified_fixed_phases_path = os.path.join(CALIBRATION_LOG_DIR+os.path.splitext(os.path.basename(self.fixed_phase_json))[0]+"%"+obs_id+".json" )
+
+                self.log_and_post_slackmessage(f"""
+                Wrote out modified fixed phases to: 
+                ```{modified_fixed_phases_path}```""", severity = "INFO")
+
+                if not self.dry_run:
+                    self.log_and_post_slackmessage("""Updating fixed-phases on *all* antenna now...""", severity = "INFO")
+                    self.update_antenna_phascals(updated_fixed_phases)
+                
+                with open(modified_fixed_phases_path, 'w+') as f:
+                    json.dump(updated_fixed_phases, f)
+
+                redis_publish_dict_to_hash(self.redis_obj, CALIBRATION_CACHE_HASH,{"fixed_phase":modified_fixed_phases_path})
+                #Overwrite the json path to the new json path for modification in the next run
+                self.fixed_phase_json = modified_fixed_phases_path
 
                 # update fixed_delays
                 try:
@@ -485,19 +495,24 @@ class CalibrationGainCollector():
                         self.slackbot.upload_file(phase_file_path, title =f"Residual phases (degrees) per frequency (Hz) calculated from\n`{obs_id}`")
                     except:
                         self.log_and_post_slackmessage("Error uploading plots", severity="INFO")
+                if manual_operation:
+                    self.log_and_post_slackmessage(f"""
+                    Manual calibration process run complete.
+                    """)
+                    return
+                else:
+                    #Sleep
+                    self.log_and_post_slackmessage(f"""
+                        Done!
 
-                #Sleep
-                self.log_and_post_slackmessage(f"""
-                    Done!
-
-                    Sleeping for {self.re_arm_time}s. 
-                    Will not detect any channel triggers during this time.
-                    """, severity = "INFO")
-                time.sleep(self.re_arm_time)
-                self.log_and_post_slackmessage(f"""
-                    Clearing redis hash: {GPU_GAINS_REDIS_HASH} contents in anticipation of next calibration run.
-                    """,severity = "DEBUG")
-                redis_clear_hash_contents(self.redis_obj, GPU_GAINS_REDIS_HASH)
+                        Sleeping for {self.re_arm_time}s. 
+                        Will not detect any channel triggers during this time.
+                        """, severity = "INFO")
+                    time.sleep(self.re_arm_time)
+                    self.log_and_post_slackmessage(f"""
+                        Clearing redis hash: {GPU_GAINS_REDIS_HASH} contents in anticipation of next calibration run.
+                        """,severity = "DEBUG")
+                    redis_clear_hash_contents(self.redis_obj, GPU_GAINS_REDIS_HASH)
             
 
 if __name__ == "__main__":
@@ -514,8 +529,6 @@ if __name__ == "__main__":
     from GPU nodes and performing necessary actions, the service will sleep for this duration until re-arming""")
     parser.add_argument("--fit-method", type=str, default="linear", required=False, help="""Pick the complex fitting method
     to use for residual calculation. Options are: ["linear", "fourier"]""")
-    parser.add_argument("--no-phase-cal", action="store_true", help="""If specified, only residual delays are updated and no
-    phase calibrations are applied.""")
     parser.add_argument("-f","--fixed-delay-to-update", type=str, required=False, help="""
     csv file path to latest fixed delays that must be modified by the residual delays calculated in this script. If not provided,
     process will try use fixed-delay file path in cache.""")
@@ -523,7 +536,17 @@ if __name__ == "__main__":
     json file path to latest fixed phases that must be modified by the residual phases calculated in this script. If not provided,
     process will try use fixed-phase file path in cache.""")
     parser.add_argument("--no-slack-post", action="store_true",help="""If specified, logs are not posted to slack.""")
+    parser.add_argument("--fcentmhz", nargs="*", default=[1000, 1001], help="""fcent values separated by space for observation""")
+    parser.add_argument("--tbin", type=float, default=1e-6, required=False, help="""tbin value for observation in seconds""")
+    parser.add_argument('file', type=argparse.FileType('r'), nargs='*')
     args = parser.parse_args()
+
+    input_json_dict = {}
+    if len(args.file) != 0:
+        for f in args.file:
+            input_json_dict.update(json.load(f))
+        args.no_slack_post = True
+        args.dry_run = True
 
     slackbot = None
     if not args.no_slack_post:
@@ -552,6 +575,7 @@ if __name__ == "__main__":
     fixed_phase_path = args.fixed_phase_to_update if args.fixed_phase_to_update is not None else fixed_phase_path
 
     calibrationGainCollector = CalibrationGainCollector(redis_obj, fixed_delay_csv = fixed_delay_path, fixed_phase_json = fixed_phase_path,
-                                hash_timeout = args.hash_timeout, dry_run = args.dry_run, no_phase_cal = args.no_phase_cal,
-                                re_arm_time = args.re_arm_time, fit_method = args.fit_method, slackbot = slackbot)
+                                hash_timeout = args.hash_timeout, dry_run = args.dry_run,
+                                re_arm_time = args.re_arm_time, fit_method = args.fit_method, slackbot = slackbot,
+                                input_json_dict = None if not bool(input_json_dict) else input_json_dict, input_fcents = args.fcentmhz, input_tbin = args.tbin)
     calibrationGainCollector.start()
