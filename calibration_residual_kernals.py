@@ -13,7 +13,8 @@ def calc_residuals_from_polyfit(ant_to_gains, observation_frequencies, frequency
 
         Return:
             delay_residual_map : {<ant> : [[residual_delay_pol0_tune0], [residual_delay_pol1_tune0], [residual_delay_pol0_tune1], [residual_delay_pol1_tune1]]}, ...} in nanoseconds
-            phase_residual_map : {<ant>_<tune_index> : [[residual_phase_pol0],[residual_phase_pol1]]}, ...} in radians
+            phase_residual_map : {<ant> : [[residual_phase_pol0_tune0],[residual_phase_pol1_tune0],
+                                        [residual_phase_pol0_tune1],[residual_phase_pol1_tune1]]}, ...} in radians
         """
         delay_residual_map = {}
         phase_residual_map = {} 
@@ -57,7 +58,8 @@ def calc_residuals_from_ifft(ant_to_gains, observation_frequencies):
         observation_frequencies : list of dimension (n_tunings, nchans) in Hz
     Return:
         delay_residual_map : {<ant> : [[residual_delay_pol0_tune0], [residual_delay_pol1_tune0], [residual_delay_pol0_tune1], [residual_delay_pol1_tune1]]}, ...} in nanoseconds
-        phase_residual_map : {<ant>_<tune_index> : [[residual_phase_pol0],[residual_phase_pol1]]}, ...} in radians
+        phase_residual_map : {<ant> : [[residual_phase_pol0_tune0],[residual_phase_pol1_tune0],
+                                        [residual_phase_pol0_tune1],[residual_phase_pol1_tune1]]}, ...} in radians
     """
     delay_residual_map = {}
     phase_residual_map = {}
