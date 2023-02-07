@@ -321,10 +321,7 @@ class CalibrationGainCollector():
                 else:
                     fcents_mhz = np.array(self.meta_obs["fcents"],dtype=float)
                     tbin = self.meta_obs["tbin"]
-
-                print(type(fcents_mhz))
-                print(fcents_mhz)
-
+                    
                 channel_bw = 1/tbin
                 fcent_hz = fcents_mhz*1e6
                 
@@ -479,20 +476,20 @@ class CalibrationGainCollector():
 
                 #Generate plots and save/publish them:
 
-                delay_file_path, phase_file_path = plot_delay_phase(delay_residual_map,phase_residual_map, 
+                delay_file_path, phase_file_path = plot_delay_phase(delay_residual_map,updated_fixed_phases, 
                         full_observation_channel_frequencies_hz,outdir = CALIBRATION_LOG_DIR, outfilestem=obs_id)
 
                 self.log_and_post_slackmessage(f"""
                         Saved  residual delay plot to: 
                         `{delay_file_path}`
-                        and residual phase plot to:
+                        and phase plot to:
                         `{phase_file_path}`
                         """, severity = "DEBUG")
 
                 if self.slackbot is not None:
                     try:
                         self.slackbot.upload_file(delay_file_path, title =f"Residual delays (ns) per antenna calculated from\n`{obs_id}`")
-                        self.slackbot.upload_file(phase_file_path, title =f"Residual phases (degrees) per frequency (Hz) calculated from\n`{obs_id}`")
+                        self.slackbot.upload_file(phase_file_path, title =f"Phases (degrees) per frequency (Hz) calculated from\n`{obs_id}`")
                     except:
                         self.log_and_post_slackmessage("Error uploading plots", severity="INFO")
                 if manual_operation:

@@ -20,7 +20,7 @@ def plot_delay_phase(residual_delays_dict, residual_phase_dict, frequency_matrix
 
     Args:
         residual_delays_dict : a dictionary mapping of {ant: [nof_streams, 1]}
-        residual_phase_dict  : a dictionary mapping of {ant: [nof_streams, nof_frequencies]} 
+        phase_dict           : a dictionary mapping of {ant: [nof_streams, nof_frequencies]} 
         frequency_matrix     : full observation channel frequencies
         outdir               : output directory to which to save the plots
         outfilestem          : string to prefix to the plot filename
@@ -101,8 +101,8 @@ def plot_delay_phase(residual_delays_dict, residual_phase_dict, frequency_matrix
                 axs[i,j].set_title(f"{antennas[ant_ind]}")
                 axs[i,j].legend(loc = 'upper right')
             
-    fig.suptitle("Residual Phase vs Freq ")
-    fig.supylabel("Residual Phase (degrees)")
+    fig.suptitle("Phase vs Freq ")
+    fig.supylabel("Phase (degrees)")
     fig.supxlabel("Frequency Channels")
 
     if outfilestem is not None:
