@@ -172,8 +172,8 @@ class CalibrationGainCollector():
         if manual_operation:
             calibration_gains = self.input_json_dict
         else:
-            calibration_gains = redis_hget_keyvalues(self.redis_obj, GPU_GAINS_REDIS_HASH)
             time.sleep(time_to_wait_until)
+            calibration_gains = redis_hget_keyvalues(self.redis_obj, GPU_GAINS_REDIS_HASH)
 
         obs_id = None
 
@@ -246,22 +246,26 @@ class CalibrationGainCollector():
             #find sorted frequency indices
             frequency_indices[tuning] = full_observation_channel_frequencies[tuning,:].searchsorted(collected_frequencies[tuning])
         
+        nof_chans_collected_0 = len(collected_frequencies[0]) 
+        nof_chans_collected_1 = len(collected_frequencies[1]) 
+        percent_collected_0 = (nof_chans_collected_0 / self.nof_channels) * 100.0
+        percent_collected_1 = (nof_chans_collected_1 / self.nof_channels) * 100.0
         log_message = """-------------------------------------------------------------"""
         try:
             log_message += f"""\n
-            Calculating phase and delay residuals for tuning 0 off frequencies: 
-            `{collected_frequencies[0][0]}Hz->{collected_frequencies[0][-1]}Hz`\n
-            while total observation frequencies for tuning 0 are: 
+            Calculating phase and delay residuals for tuning 0 off of:
+            {nof_chans_collected_0} collected gains out of {self.nof_channels} = {percent_collected_0}%.
+            Total observation frequencies for tuning 0 are expected to span: 
             `{full_observation_channel_frequencies[0,0]}->{full_observation_channel_frequencies[0,-1]}Hz`"""
         except IndexError:
             log_message += f"""\n
             No values received for tuning 0, and so no residuals will be calculated for that tuning."""
         try:
-            log_message += f"""\n
-            Calculating phase and delay residuals for tuning 1 off frequencies: 
-            `{collected_frequencies[1][0]}Hz->{collected_frequencies[1][-1]}Hz`\n
-            while total observation frequencies for tuning 1 are: 
-            `{full_observation_channel_frequencies[1,0]}Hz->{full_observation_channel_frequencies[1,-1]}Hz`"""
+             log_message += f"""\n
+            Calculating phase and delay residuals for tuning 1 off of:
+            {nof_chans_collected_1} collected gains out of {self.nof_channels} = {percent_collected_1}%.
+            Total observation frequencies for tuning 1 are expected to span: 
+            `{full_observation_channel_frequencies[1,0]}->{full_observation_channel_frequencies[1,-1]}Hz`"""
         except IndexError:
             log_message += f"""\n
             No values received for tuning 1, and so no residuals will be calculated for that tuning."""
@@ -456,7 +460,7 @@ class CalibrationGainCollector():
                 Modifying fixed-phases found in
                 ```{fixed_phase_filepath}```
                 with the *residual phases* calculated in
-                ```{phase_residual_filename}```.
+                ```{phase_residual_filename}```
                 """)
 
                 #Add the phase residual to the fixed phases on hand:
