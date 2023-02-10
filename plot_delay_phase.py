@@ -11,6 +11,93 @@ import matplotlib.pyplot as plt
 import json
 import argparse
 
+def plot_gain_phase(ant_to_gains, observation_frequencies, fit_method="linear", outdir=None, outfilestem=None):
+    """
+    Plot the phase of the received complex gain values per antenna. In the event that
+    the fitting method is "linear", unwrap the phases, before plotting.
+
+    Args:
+        ant_to_gains : {<ant> : [[complex(gains_pol0_tune0)], [complex(gains_pol1_tune0)], [complex(gains_pol0_tune1)], [complex(gains_pol1_tune1)]], ...}
+        observation_frequencies : list of dimension (n_tunings, nchans) in Hz
+    """
+
+    #Getting the antenna info from the keys
+    antennas = list(ant_to_gains.keys())
+
+    #plotting the phases vs antennas
+    #make a grid plot of phase vs freq for all antennas
+    grid_x = 6
+    grid_y = 5
+    fig, axs = plt.subplots(grid_x, grid_y, sharex  = True, sharey = True, constrained_layout=True, figsize = (12,14))
+
+    #Tuning 0
+    for i in range(grid_x):
+        for j in range(grid_y):
+            ant_ind = (i*grid_y)+j
+            if ant_ind < len(antennas):
+                phases_pol0 = np.angle(ant_to_gains[antennas[ant_ind]][0]) * (180.0/np.pi)
+                phases_pol1 = np.angle(ant_to_gains[antennas[ant_ind]][1]) * (180.0/np.pi)
+                if fit_method=="linear":
+                    phases_pol0 = np.unwrap(phases_pol0)
+                    phases_pol1 = np.unwrap(phases_pol1)
+                axs[i,j].plot(observation_frequencies[0,:], phases_pol0, '.',  label = "AC0")
+                axs[i,j].plot(observation_frequencies[0,:], phases_pol1, '.',  label = "AC1")
+                axs[i,j].set_title(f"{antennas[ant_ind]}_AC")
+                axs[i,j].legend(loc = 'upper right')
+
+    fig.suptitle("Recorded Phase vs Freq for tuning AC")
+    fig.supylabel("Phase (degrees)")
+    fig.supxlabel("Frequency Channels")
+
+    if outfilestem is not None:
+        outfile_name = outfilestem+"recorded_phaseAC_vs_antennas.png"
+    else:
+        outfile_name = "recorded_phaseAC_vs_antennas.png"
+
+    if outdir is not None:
+        phase_file_path_ac = os.path.join(outdir, outfile_name)
+    else:
+        phase_file_path_ac = outfile_name
+         
+    plt.savefig(phase_file_path_ac, dpi = 150)
+    plt.close() 
+
+    fig, axs = plt.subplots(grid_x, grid_y, sharex  = True, sharey = True, constrained_layout=True, figsize = (12,14))
+
+    #Tuning 1
+    for i in range(grid_x):
+        for j in range(grid_y):
+            ant_ind = (i*grid_y)+j
+            if ant_ind < len(antennas):
+                phases_pol0 = np.angle(ant_to_gains[antennas[ant_ind]][2]) * (180.0/np.pi)
+                phases_pol1 = np.angle(ant_to_gains[antennas[ant_ind]][3]) * (180.0/np.pi)
+                if fit_method=="linear":
+                    phases_pol0 = np.unwrap(phases_pol0)
+                    phases_pol1 = np.unwrap(phases_pol1)
+
+                axs[i,j].plot(observation_frequencies[1,:], phases_pol0, '.',  label = "BD0")
+                axs[i,j].plot(observation_frequencies[1,:], phases_pol1, '.',  label = "BD1")
+                axs[i,j].set_title(f"{antennas[ant_ind]}_BD")
+                axs[i,j].legend(loc = 'upper right')
+
+    fig.suptitle("Recorded Phase vs Freq for tuning BD")
+    fig.supylabel("Phase (degrees)")
+    fig.supxlabel("Frequency Channels")
+
+    if outfilestem is not None:
+        outfile_name = outfilestem+"recorded_phaseBD_vs_antennas.png"
+    else:
+        outfile_name = "recorded_phaseBD_vs_antennas.png"
+
+    if outdir is not None:
+        phase_file_path_bd = os.path.join(outdir, outfile_name)
+    else:
+        phase_file_path_bd = outfile_name
+         
+    plt.savefig(phase_file_path_bd, dpi = 150)
+    plt.close() 
+
+    return phase_file_path_ac, phase_file_path_bd
 
 def plot_delay_phase(residual_delays_dict, residual_phase_dict, frequency_matrix, outdir=None, outfilestem=None):
     """

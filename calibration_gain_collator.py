@@ -15,7 +15,7 @@ from calibration_residual_kernals import calc_residuals_from_polyfit, calc_resid
 from cosmic.observations.slackbot import SlackBot
 from cosmic.fengines import ant_remotefeng_map
 from cosmic.redis_actions import redis_obj, redis_hget_keyvalues, redis_publish_dict_to_hash, redis_clear_hash_contents, redis_publish_service_pulse, redis_publish_dict_to_channel
-from plot_delay_phase import plot_delay_phase
+from plot_delay_phase import plot_delay_phase, plot_gain_phase
 
 LOGFILENAME = "/home/cosmic/logs/DelayCalibration.log"
 logger = logging.getLogger('calibration_delays')
@@ -346,6 +346,27 @@ class CalibrationGainCollector():
                     full_observation_channel_frequencies_hz
                 )
 
+                self.log_and_post_slackmessage("""
+                Plotting phase of the collected recorded gains...
+                """,severity="INFO")
+
+                phase_file_path_ac, phase_file_path_bd = plot_gain_phase(full_gains_map, full_observation_channel_frequencies_hz, fit_method = self.fit_method,
+                                                                        outdir = os.path.join(self.output_dir ,"calibration_plots"), outfilestem=obs_id)
+
+                self.log_and_post_slackmessage(f"""
+                        Saved recorded gain phase for tuning AC to: 
+                        `{phase_file_path_ac}`
+                        and BD to:
+                        `{phase_file_path_bd}`
+                        """, severity = "INFO")
+                
+                if self.slackbot is not None:
+                    try:
+                        self.slackbot.upload_file(phase_file_path_ac, title =f"Recorded residual phases (degrees) for tuning AC from\n`{obs_id}`")
+                        self.slackbot.upload_file(phase_file_path_bd, title =f"Recorded residual phases (degrees) for tuning BD from\n`{obs_id}`")
+                    except:
+                        self.log_and_post_slackmessage("Error uploading plots", severity="INFO")
+                
                 #calculate residual delays/phases for the collected frequencies
                 if self.fit_method == "linear":
                     delay_residual_map, phase_residual_map = calc_residuals_from_polyfit(full_gains_map, full_observation_channel_frequencies_hz,frequency_indices)
@@ -394,7 +415,6 @@ class CalibrationGainCollector():
 
                 #-------------------------UPDATE THE FIXED DELAYS-------------------------#
                 fixed_delay_filepath = redis_hget_keyvalues(self.redis_obj, CALIBRATION_CACHE_HASH)["fixed_delay"]
-                print(fixed_delay_filepath) 
                 try:
                     fixed_delays = pd.read_csv(os.path.abspath(fixed_delay_filepath), names = ["IF0","IF1","IF2","IF3"],
                             header=None, skiprows=1)
@@ -442,11 +462,11 @@ class CalibrationGainCollector():
                     self.delay_calibration.calib_csv = modified_fixed_delays_path
                     self.delay_calibration.run()
                 #update the filepath for the latest fixed delay values
-                redis_publish_dict_to_hash(self.redis_obj, CALIBRATION_CACHE_HASH, {"fixed_delay":modified_fixed_delays_path})
+                if not self.dry_run:
+                    redis_publish_dict_to_hash(self.redis_obj, CALIBRATION_CACHE_HASH, {"fixed_delay":modified_fixed_delays_path})
                 
                 #-------------------------UPDATE THE FIXED PHASES-------------------------#
                 fixed_phase_filepath = redis_hget_keyvalues(self.redis_obj, CALIBRATION_CACHE_HASH)["fixed_phase"]
-                print(fixed_phase_filepath)
                 try:
                     with open(fixed_phase_filepath, 'r') as f:
                         fixed_phases = json.load(f)
@@ -489,7 +509,8 @@ class CalibrationGainCollector():
                 with open(modified_fixed_phases_path, 'w+') as f:
                     json.dump(updated_fixed_phases, f)
                 #update the filepath for the latest fixed phase values
-                redis_publish_dict_to_hash(self.redis_obj, CALIBRATION_CACHE_HASH, {"fixed_phase":modified_fixed_phases_path})
+                if not self.dry_run:
+                    redis_publish_dict_to_hash(self.redis_obj, CALIBRATION_CACHE_HASH, {"fixed_phase":modified_fixed_phases_path})
 
                 #-------------------------PLOT GENERATION AND SAVING-------------------------#
                 delay_file_path, phase_file_path_ac, phase_file_path_bd = plot_delay_phase(delay_residual_map,updated_fixed_phases, 
