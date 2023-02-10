@@ -488,20 +488,23 @@ class CalibrationGainCollector():
                 redis_publish_dict_to_hash(self.redis_obj, CALIBRATION_CACHE_HASH, {"fixed_phase":modified_fixed_phases_path})
 
                 #-------------------------PLOT GENERATION AND SAVING-------------------------#
-                delay_file_path, phase_file_path = plot_delay_phase(delay_residual_map,updated_fixed_phases, 
+                delay_file_path, phase_file_path_ac, phase_file_path_bd = plot_delay_phase(delay_residual_map,updated_fixed_phases, 
                         full_observation_channel_frequencies_hz,outdir = os.path.join(self.output_dir ,"calibration_plots"), outfilestem=obs_id)
 
                 self.log_and_post_slackmessage(f"""
                         Saved  residual delay plot to: 
                         `{delay_file_path}`
                         and phase plot to:
-                        `{phase_file_path}`
-                        """, severity = "INFO")
+                        `{phase_file_path_ac}`
+                        and
+                        `{phase_file_path_bd}`
+                        """, severity = "DEBUG")
 
                 if self.slackbot is not None:
                     try:
                         self.slackbot.upload_file(delay_file_path, title =f"Residual delays (ns) per antenna calculated from\n`{obs_id}`")
-                        self.slackbot.upload_file(phase_file_path, title =f"Phases (degrees) per frequency (Hz) calculated from\n`{obs_id}`")
+                        self.slackbot.upload_file(phase_file_path_ac, title =f"Phases (degrees) per frequency (Hz) for tuning AC calculated from\n`{obs_id}`")
+                        self.slackbot.upload_file(phase_file_path_bd, title =f"Phases (degrees) per frequency (Hz) for tuning BD calculated from\n`{obs_id}`")
                     except:
                         self.log_and_post_slackmessage("Error uploading plots", severity="INFO")
                 if manual_operation:

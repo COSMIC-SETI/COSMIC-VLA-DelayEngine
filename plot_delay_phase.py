@@ -21,9 +21,14 @@ def plot_delay_phase(residual_delays_dict, residual_phase_dict, frequency_matrix
     Args:
         residual_delays_dict : a dictionary mapping of {ant: [nof_streams, 1]}
         phase_dict           : a dictionary mapping of {ant: [nof_streams, nof_frequencies]} 
-        frequency_matrix     : full observation channel frequencies
+        frequency_matrix     : full observation channel frequencies dims(nof_tunings, nof_frequencies)
         outdir               : output directory to which to save the plots
         outfilestem          : string to prefix to the plot filename
+
+    Returns:
+        delay_file_path : str filepath to the residual delay vs ant png plot
+        phase_file_path_ac : str filepath to the phase vs freq plot for ac tuning
+        phase_file_path_bd : str filepath to the phase vs freq plot for bd tuning
     """
 
     #Getting the antenna info from the keys
@@ -86,6 +91,33 @@ def plot_delay_phase(residual_delays_dict, residual_phase_dict, frequency_matrix
     #make a grid plot of phase vs freq for all antennas
     grid_x = 6
     grid_y = 5
+
+    fig, axs = plt.subplots(grid_x, grid_y, sharex  = True, sharey = True, constrained_layout=True, figsize = (12,14))
+    for i in range(grid_x):
+        for j in range(grid_y):
+            ant_ind = (i*grid_y)+j
+            if ant_ind < len(antennas):
+                axs[i,j].plot(frequency_matrix[0,:], phase_dat[ant_ind,0,:], '.',  label = "AC0")
+                axs[i,j].plot(frequency_matrix[0,:], phase_dat[ant_ind,1,:], '.',  label = "AC1")
+                axs[i,j].set_title(f"{antennas[ant_ind]}_AC")
+                axs[i,j].legend(loc = 'upper right')
+    
+    fig.suptitle("Phase vs Freq for tuning AC")
+    fig.supylabel("Phase (degrees)")
+    fig.supxlabel("Frequency Channels")
+
+    if outfilestem is not None:
+        outfile_name = outfilestem+"phaseAC_vs_antennas.png"
+    else:
+        outfile_name = "phaseAC_vs_antennas.png"
+
+    if outdir is not None:
+        phase_file_path_ac = os.path.join(outdir, outfile_name)
+    else:
+        phase_file_path_ac = outfile_name
+         
+    plt.savefig(phase_file_path_ac, dpi = 150)
+    plt.close() 
     
     fig, axs = plt.subplots(grid_x, grid_y, sharex  = True, sharey = True, constrained_layout=True, figsize = (12,14))
     
@@ -93,32 +125,29 @@ def plot_delay_phase(residual_delays_dict, residual_phase_dict, frequency_matrix
         for j in range(grid_y):
             ant_ind = (i*grid_y)+j
             if ant_ind < len(antennas):
-                
-                axs[i,j].plot(frequency_matrix[0,:], phase_dat[ant_ind,0,:], '.',  label = "AC0")
-                axs[i,j].plot(frequency_matrix[0,:], phase_dat[ant_ind,1,:], '.',  label = "AC1")
                 axs[i,j].plot(frequency_matrix[1,:], phase_dat[ant_ind,2,:], '.',  label = "BD0")
                 axs[i,j].plot(frequency_matrix[1,:], phase_dat[ant_ind,3,:], '.',  label = "BD1")
-                axs[i,j].set_title(f"{antennas[ant_ind]}")
+                axs[i,j].set_title(f"{antennas[ant_ind]}_BD")
                 axs[i,j].legend(loc = 'upper right')
             
-    fig.suptitle("Phase vs Freq ")
+    fig.suptitle("Phase vs Freq for tuning BD")
     fig.supylabel("Phase (degrees)")
     fig.supxlabel("Frequency Channels")
 
     if outfilestem is not None:
-        outfile_name = outfilestem+"phase_vs_antennas.png"
+        outfile_name = outfilestem+"phaseBD_vs_antennas.png"
     else:
-        outfile_name = "phase_vs_antennas.png"
+        outfile_name = "phaseBD_vs_antennas.png"
 
     if outdir is not None:
-        phase_file_path = os.path.join(outdir, outfile_name)
+        phase_file_path_bd = os.path.join(outdir, outfile_name)
     else:
-        phase_file_path = outfile_name
+        phase_file_path_bd = outfile_name
          
-    plt.savefig(phase_file_path, dpi = 150)
+    plt.savefig(phase_file_path_bd, dpi = 150)
     plt.close() 
 
-    return delay_file_path, phase_file_path
+    return delay_file_path, phase_file_path_ac, phase_file_path_bd
 
 if __name__ == '__main__':
     
