@@ -45,7 +45,7 @@ def plot_gain_phase(ant_to_gains, observation_frequencies, fit_method="linear", 
                 axs[i,j].set_title(f"{antennas[ant_ind]}_AC")
                 axs[i,j].legend(loc = 'upper right')
 
-    fig.suptitle("Recorded Phase vs Freq for tuning AC")
+    fig.suptitle(f"Recorded Phase vs Freq\nfrom {outfilestem}\nfor tuning AC")
     fig.supylabel("Phase (degrees)")
     fig.supxlabel("Frequency Channels")
 
@@ -80,7 +80,7 @@ def plot_gain_phase(ant_to_gains, observation_frequencies, fit_method="linear", 
                 axs[i,j].set_title(f"{antennas[ant_ind]}_BD")
                 axs[i,j].legend(loc = 'upper right')
 
-    fig.suptitle("Recorded Phase vs Freq for tuning BD")
+    fig.suptitle(f"Recorded Phase vs Freq\nfrom {outfilestem}\nfor tuning BD")
     fig.supylabel("Phase (degrees)")
     fig.supxlabel("Frequency Channels")
 
@@ -146,18 +146,25 @@ def plot_delay_phase(residual_delays_dict, residual_phase_dict, frequency_matrix
     phase_dat *= (180.0/np.pi)
     
     #plotting the residual delays vs antennas
-    fig, ax = plt.subplots(constrained_layout=True, figsize = (10,6))
+    fig, ax = plt.subplots(2, 1, sharex = True, constrained_layout=True, figsize = (10,12))
 
-    ax.plot(delay_dat[:,0], '.',  label = "AC0")
-    ax.plot(delay_dat[:,1], '.',  label = "AC1")
-    ax.plot(delay_dat[:,2], '.',  label = "BD0")
-    ax.plot(delay_dat[:,3], '.',  label = "BD1")
+    for i in range(2):
+        ax[i].plot(delay_dat[:,0], '.',  label = "AC0")
+        ax[i].plot(delay_dat[:,1], '.',  label = "AC1")
+        ax[i].plot(delay_dat[:,2], '.',  label = "BD0")
+        ax[i].plot(delay_dat[:,3], '.',  label = "BD1")
 
-    ax.set_title("Residual Delays vs Antennas")
-    ax.legend(loc = 'upper right')
-    ax.set_xticks(np.arange(len(antennas)))
-    ax.set_xticklabels(antennas)
+        ax[i].legend(loc = 'upper right')
+        ax[i].set_xticks(np.arange(len(antennas)))
+        ax[i].set_xticklabels(antennas)
     
+    ax[0].set_title("Residual delay vs antenna")
+    ax[1].set_title("Residual delay vs antenna - Zoomed [-5ns, 5ns)")
+    ax[1].set_ylim(-5, 5)
+    
+    fig.suptitle(f"""
+    Calculated Residual delay for:
+    {outfilestem}""")
     fig.supylabel("Residual Delays (ns)")
     fig.supxlabel("Antennas")
 
@@ -189,7 +196,7 @@ def plot_delay_phase(residual_delays_dict, residual_phase_dict, frequency_matrix
                 axs[i,j].set_title(f"{antennas[ant_ind]}_AC")
                 axs[i,j].legend(loc = 'upper right')
     
-    fig.suptitle("Phase vs Freq for tuning AC")
+    fig.suptitle(f"Calculated Phase Calibration Coefficients vs Freq\nfrom{outfilestem}\nfor tuning AC")
     fig.supylabel("Phase (degrees)")
     fig.supxlabel("Frequency Channels")
 
@@ -217,7 +224,7 @@ def plot_delay_phase(residual_delays_dict, residual_phase_dict, frequency_matrix
                 axs[i,j].set_title(f"{antennas[ant_ind]}_BD")
                 axs[i,j].legend(loc = 'upper right')
             
-    fig.suptitle("Phase vs Freq for tuning BD")
+    fig.suptitle(f"Calculated Phase Calibration Coefficients vs Freq\nfrom{outfilestem}\nfor tuning BD")
     fig.supylabel("Phase (degrees)")
     fig.supxlabel("Frequency Channels")
 

@@ -362,8 +362,8 @@ class CalibrationGainCollector():
                 
                 if self.slackbot is not None:
                     try:
-                        self.slackbot.upload_file(phase_file_path_ac, title =f"Recorded residual phases (degrees) for tuning AC from\n`{obs_id}`")
-                        self.slackbot.upload_file(phase_file_path_bd, title =f"Recorded residual phases (degrees) for tuning BD from\n`{obs_id}`")
+                        self.slackbot.upload_file(phase_file_path_ac, title =f"Recorded phases (degrees) for tuning AC from\n`{obs_id}`")
+                        self.slackbot.upload_file(phase_file_path_bd, title =f"Recorded phases (degrees) for tuning BD from\n`{obs_id}`")
                     except:
                         self.log_and_post_slackmessage("Error uploading plots", severity="INFO")
                 
