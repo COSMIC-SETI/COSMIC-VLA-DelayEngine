@@ -7,16 +7,20 @@ def calc_residuals_from_polyfit(ant_to_gains, observation_frequencies, frequency
         Returns ant to residual delay and ant to phase cal maps.
 
         Args: 
-            ant_to_gains : {<ant> : [[complex(gains_pol0_tune0)], [complex(gains_pol1_tune0)], [complex(gains_pol0_tune1)], [complex(gains_pol1_tune1)]], ...}
-            observation_frequencies : list of dimension (n_tunings, nchans) in Hz
+            ant_to_gains : A dictionary mapping of antenna name to complex gain matrix of dimension (n_streams, n_chans).
+                    {<ant> : [[complex(gains_pol0_tune0)], [complex(gains_pol1_tune0)], [complex(gains_pol0_tune1)], [complex(gains_pol1_tune1)]], ...}
+            observation_frequencies : list of frequencies in Hz of dimension (n_tunings, nchans)
+            current_phase_cals : A mapping of antenna to phase coefficients (in radians) on the F-Engine at present - a matrix of dimension (n_streams, n_chans).
+                    {<ant> : [[phase_cal_pol0_tune0], [phase_cal_pol1_tune0], [phase_cal_pol0_tune1], [phase_cal_pol1_tune1]], ...}
             frequency_indices : indices of the collected gains in the full n_chans per tuning
-            current_phase_cals : {<ant> : [[phase_cal_pol0_tune0], [phase_cal_pol1_tune0], [phase_cal_pol0_tune1], [phase_cal_pol1_tune1]], ...}
 
         Return:
-            delay_residual_map : {<ant> : [[residual_delay_pol0_tune0], [residual_delay_pol1_tune0], [residual_delay_pol0_tune1], [residual_delay_pol1_tune1]]}, ...} in nanoseconds
-            phase_cal_map : {<ant> : [[phase_pol0_tune0],[phase_pol1_tune0],
-                                        [phase_pol0_tune1],[phase_pol1_tune1]]}, ...} in radians
-        """
+            delay_residual_map : A mapping of antenna to delay residual values in nanoseconds of dimension (n_streams)
+                    {<ant> : [residual_delay_pol0_tune0, residual_delay_pol1_tune0, residual_delay_pol0_tune1, residual_delay_pol1_tune1]}, ...}
+            phase_cal_map : A mapping of antenna to phase calibration value in radians of dimension (n_streams, n_chans).
+                    {<ant> : [[phase_pol0_tune0],[phase_pol1_tune0],
+                                [phase_pol0_tune1],[phase_pol1_tune1]]}, ...}
+    """
         delay_residual_map = {}
         phase_cal_map = {} 
 
@@ -60,12 +64,16 @@ def calc_residuals_from_ifft(ant_to_gains, observation_frequencies, current_phas
     Returns ant to residual delay and ant to phase cal maps.
 
     Args:
-        ant_to_gains : {<ant> : [[complex(gains_pol0_tune0)], [complex(gains_pol1_tune0)], [complex(gains_pol0_tune1)], [complex(gains_pol1_tune1)]], ...}
-        observation_frequencies : list of dimension (n_tunings, nchans) in Hz
-        current_phase_cals : {<ant> : [[phase_cal_pol0_tune0], [phase_cal_pol1_tune0], [phase_cal_pol0_tune1], [phase_cal_pol1_tune1]], ...}
+        ant_to_gains : A dictionary mapping of antenna name to complex gain matrix of dimension (n_streams, n_chans).
+                    {<ant> : [[complex(gains_pol0_tune0)], [complex(gains_pol1_tune0)], [complex(gains_pol0_tune1)], [complex(gains_pol1_tune1)]], ...}
+        observation_frequencies : list of frequencies in Hz of dimension (n_tunings, nchans)
+        current_phase_cals : A mapping of antenna to phase coefficients on the F-Engine at present - a matrix of dimension (n_streams, n_chans).
+                    {<ant> : [[phase_cal_pol0_tune0], [phase_cal_pol1_tune0], [phase_cal_pol0_tune1], [phase_cal_pol1_tune1]], ...}
     Return:
-        delay_residual_map : {<ant> : [[residual_delay_pol0_tune0], [residual_delay_pol1_tune0], [residual_delay_pol0_tune1], [residual_delay_pol1_tune1]]}, ...} in nanoseconds
-        phase_cal_map : {<ant> : [[phase_pol0_tune0],[phase_pol1_tune0],
+        delay_residual_map : A mapping of antenna to delay residual values in nanoseconds of dimension (n_streams)
+                    {<ant> : [residual_delay_pol0_tune0, residual_delay_pol1_tune0, residual_delay_pol0_tune1, residual_delay_pol1_tune1]}, ...}
+        phase_cal_map : A mapping of antenna to phase calibration value in radians of dimension (n_streams, n_chans).
+                    {<ant> : [[phase_pol0_tune0],[phase_pol1_tune0],
                                         [phase_pol0_tune1],[phase_pol1_tune1]]}, ...} in radians
     """
     delay_residual_map = {}
