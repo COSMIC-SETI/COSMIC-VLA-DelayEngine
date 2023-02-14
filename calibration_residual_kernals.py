@@ -29,7 +29,7 @@ def calc_residuals_from_polyfit(ant_to_gains, observation_frequencies, frequency
 
             #Subtract the last applied phases from the gain (incase incorrect)
             current_phase_matrix = np.exp(1j * np.array(current_phase_cals[ant]))
-            new_gain_matrix = gain_matrix / current_phase_matrix
+            new_gain_matrix = gain_matrix * current_phase_matrix
 
             nof_streams = int(gain_matrix.shape[0])
             nof_tunings = int(observation_frequencies.shape[0])
@@ -84,7 +84,7 @@ def calc_residuals_from_ifft(ant_to_gains, observation_frequencies, current_phas
 
         #Subtract the last applied phases from the gain (incase incorrect)
         current_phase_matrix = np.exp(1j * np.array(current_phase_cals[ant]))
-        new_gain_matrix = gain_matrix / current_phase_matrix
+        new_gain_matrix = gain_matrix * current_phase_matrix
 
         nof_streams = gain_matrix.shape[0]
         nof_tunings,nof_chan = observation_frequencies.shape
@@ -103,7 +103,7 @@ def calc_residuals_from_ifft(ant_to_gains, observation_frequencies, current_phas
                 stream_idx = int(str(tune)+str(pol),2)
                 residual_delays[stream_idx] = -1.0 * tlags[max_idxs[stream_idx]]
                 gain_from_residual_delay = np.exp(2j*np.pi*(observation_frequencies[tune,:]*1e-9)*residual_delays[stream_idx])
-                zero_gains_indices = np.where(new_gain_matrix[stream_idx,:]==0.0)
+                zero_gains_indices = np.where(gain_matrix[stream_idx,:]==0.0)
                 phase_cals[stream_idx] = np.angle(new_gain_matrix[stream_idx,:]/gain_from_residual_delay)
                 phase_cals[stream_idx, zero_gains_indices] = 0.0
 
