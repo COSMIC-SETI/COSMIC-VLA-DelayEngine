@@ -474,8 +474,6 @@ class CalibrationGainCollector():
                     self.log_and_post_slackmessage("""Updating fixed-delays on *all* antenna now...""", severity = "INFO")
                     self.delay_calibration.calib_csv = modified_fixed_delays_path
                     self.delay_calibration.run()
-                #update the filepath for the latest fixed delay values
-                if not self.dry_run:
                     redis_publish_dict_to_hash(self.redis_obj, CALIBRATION_CACHE_HASH, {"fixed_delay":modified_fixed_delays_path})
                 
                 #-------------------------LOAD THE NEW FIXED PHASES-------------------------#
@@ -494,17 +492,16 @@ class CalibrationGainCollector():
                 Wrote out modified fixed phases to: 
                 ```{modified_fixed_phases_path}```""", severity = "INFO")
 
-                if not self.dry_run:
-                    self.log_and_post_slackmessage("""Updating fixed-phases on *all* antenna now...""", severity = "INFO")
-                    self.update_antenna_phascals(phase_cal_map)
-                    
                 t_phase_cal_map = self.dictnpy_to_dictlist(phase_cal_map)
                 with open(modified_fixed_phases_path, 'w+') as f:
                     json.dump(t_phase_cal_map, f)
-                #update the filepath for the latest fixed phase values
-                if not self.dry_run:
-                    redis_publish_dict_to_hash(self.redis_obj, CALIBRATION_CACHE_HASH, {"fixed_phase":modified_fixed_phases_path})
 
+                # Update the fixed phases on the F-Engines and update the fixed_phase path
+                if not self.dry_run:
+                    self.log_and_post_slackmessage("""Updating fixed-phases on *all* antenna now...""", severity = "INFO")
+                    self.update_antenna_phascals(phase_cal_map)
+                    redis_publish_dict_to_hash(self.redis_obj, CALIBRATION_CACHE_HASH, {"fixed_phase":modified_fixed_phases_path})
+                    
                 #-------------------------PLOT GENERATION AND SAVING-------------------------#
                 delay_file_path, phase_file_path_ac, phase_file_path_bd = plot_delay_phase(delay_residual_map, phase_cal_map, 
                         full_observation_channel_frequencies_hz, outdir = os.path.join(self.output_dir ,"calibration_plots"), outfilestem=obs_id)
