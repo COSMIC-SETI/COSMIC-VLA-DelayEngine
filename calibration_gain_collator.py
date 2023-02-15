@@ -572,7 +572,7 @@ if __name__ == "__main__":
     parser.add_argument("--tbin", type=float, default=1e-6, required=False, help="""tbin value for observation in seconds""")
     parser.add_argument('file', type=argparse.FileType('r'), nargs='*')
     args = parser.parse_args()
-
+    manual_run = False
     input_json_dict = {}
     if len(args.file) != 0:
         for f in args.file:
