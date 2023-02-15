@@ -20,6 +20,8 @@ def plot_gain_phase(ant_to_gains, observation_frequencies, fit_method="linear", 
         ant_to_gains : {<ant> : [[complex(gains_pol0_tune0)], [complex(gains_pol1_tune0)], [complex(gains_pol0_tune1)], [complex(gains_pol1_tune1)]], ...}
         observation_frequencies : list of dimension (n_tunings, nchans) in Hz
     """
+    if outdir is not None and not os.path.exists(outdir):
+        os.makedirs(outdir)
 
     #Getting the antenna info from the keys
     antennas = list(ant_to_gains.keys())
@@ -117,6 +119,8 @@ def plot_delay_phase(residual_delays_dict, residual_phase_dict, frequency_matrix
         phase_file_path_ac : str filepath to the phase vs freq plot for ac tuning
         phase_file_path_bd : str filepath to the phase vs freq plot for bd tuning
     """
+    if outdir is not None and not os.path.exists(outdir):
+        os.makedirs(outdir)
 
     #Getting the antenna info from the keys
     antennas = list(residual_delays_dict.keys())

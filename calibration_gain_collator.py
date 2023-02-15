@@ -49,7 +49,8 @@ CALIBRATION_CACHE_HASH = "CAL_fixedValuePaths"
 
 class CalibrationGainCollector():
     def __init__(self, redis_obj, output_dir, hash_timeout=20, re_arm_time = 30, fit_method = "linear", dry_run = False,
-    nof_streams = 4, nof_tunings = 2, nof_pols = 2, nof_channels = 1024, slackbot=None, input_json_dict = None, input_fcents = None, input_tbin = None):
+    nof_streams = 4, nof_tunings = 2, nof_pols = 2, nof_channels = 1024, slackbot=None, input_fixed_delays = None, input_fixed_phases = None,
+    input_json_dict = None, input_fcents = None, input_tbin = None):
         self.redis_obj = redis_obj
         self.output_dir = output_dir
         self.hash_timeout = hash_timeout
@@ -57,6 +58,8 @@ class CalibrationGainCollector():
         self.fit_method = fit_method
         self.dry_run = dry_run
         self.slackbot = slackbot
+        self.input_fixed_delays = input_fixed_delays
+        self.input_fixed_phases = input_fixed_phases
         self.input_json_dict = input_json_dict
         self.fcents = input_fcents
         self.tbin = input_tbin
@@ -228,8 +231,7 @@ class CalibrationGainCollector():
 
         Returns:
             ant_gains_map : a dictionary mapping of {ant: [nof_streams, nof_frequencies]}
-            chan_start : integer index for the start frequency of those collected out of all observation channel frequencies
-            chan_stop : integer index for the stop frequency of those collected out of all observation channel frequencies
+            frequency_indices : a dictionary mapping of {tuning_idx : np.array(int)}
         """
         full_gains_map = {}
         sortings = {}
@@ -366,23 +368,42 @@ class CalibrationGainCollector():
                         self.slackbot.upload_file(phase_file_path_bd, title =f"Recorded phases (degrees) for tuning BD from\n`{obs_id}`")
                     except:
                         self.log_and_post_slackmessage("Error uploading plots", severity="INFO")
-                
+
+                if not manual_operation:
+                    fixed_phase_filepath = redis_hget_keyvalues(self.redis_obj, CALIBRATION_CACHE_HASH)["fixed_phase"]
+                else:
+                    fixed_phase_filepath = self.input_fixed_phases
+                try:
+                    with open(fixed_phase_filepath, 'r') as f:
+                        fixed_phases = json.load(f)
+                except:
+                    self.log_and_post_slackmessage(f"""
+                        Could *not* read fixed phases from {fixed_phase_filepath} for updating with calculated residuals.
+                        Clearning up and aborting calibration process...
+                    """, severity = "ERROR")
+                    return
+                self.log_and_post_slackmessage(f"""
+                Modifying fixed-phases found in
+                ```{fixed_phase_filepath}```
+                """)
+
                 #calculate residual delays/phases for the collected frequencies
                 if self.fit_method == "linear":
-                    delay_residual_map, phase_residual_map = calc_residuals_from_polyfit(full_gains_map, full_observation_channel_frequencies_hz,frequency_indices)
+                    delay_residual_map, phase_cal_map = calc_residuals_from_polyfit(full_gains_map, full_observation_channel_frequencies_hz,
+                                                                                    fixed_phases, frequency_indices)
                 elif self.fit_method == "fourier":
-                    delay_residual_map, phase_residual_map = calc_residuals_from_ifft(full_gains_map,full_observation_channel_frequencies_hz)
+                    delay_residual_map, phase_cal_map = calc_residuals_from_ifft(full_gains_map,full_observation_channel_frequencies_hz,
+                                                                                fixed_phases, frequency_indices)
 
+                #-------------------------SAVE RESIDUAL DELAYS-------------------------#
                 #For json dumping:
                 t_delay_dict = self.dictnpy_to_dictlist(delay_residual_map)
-                t_phase_dict = self.dictnpy_to_dictlist(phase_residual_map)
 
                 #log directory for calibration delay residuals
                 delay_residual_path = os.path.join(self.output_dir, "delay_residuals")
                 if not os.path.exists(delay_residual_path):
                     os.makedirs(delay_residual_path)
 
-                #-------------------------SAVE RESIDUAL DELAYS-------------------------#
                 delay_residual_filename = os.path.join(delay_residual_path, f"calibrationdelayresiduals_{obs_id}.json")
                 with open(delay_residual_filename, 'w') as f:
                     json.dump(t_delay_dict, f)
@@ -399,22 +420,11 @@ class CalibrationGainCollector():
                     ```{pretty_print_json}```
                     """, severity = "INFO")
 
-                #log directory for calibration phase residuals
-                phase_residual_path = os.path.join(self.output_dir, "phase_residuals")
-                if not os.path.exists(phase_residual_path):
-                    os.makedirs(phase_residual_path)
-
-               #-------------------------SAVE RESIDUAL PHASES-------------------------#
-                phase_residual_filename = os.path.join(phase_residual_path,f"calibrationphaseresiduals_{obs_id}.json")
-                with open(phase_residual_filename, 'w') as f:
-                    json.dump(t_phase_dict, f)
-                self.log_and_post_slackmessage(f"""
-                    Wrote out calculated *residual phases* to: 
-                    {phase_residual_filename}""", severity = "DEBUG")
-                redis_publish_dict_to_hash(self.redis_obj, "META_residualPhases",t_phase_dict)
-
                 #-------------------------UPDATE THE FIXED DELAYS-------------------------#
-                fixed_delay_filepath = redis_hget_keyvalues(self.redis_obj, CALIBRATION_CACHE_HASH)["fixed_delay"]
+                if not manual_operation:
+                    fixed_delay_filepath = redis_hget_keyvalues(self.redis_obj, CALIBRATION_CACHE_HASH)["fixed_delay"]
+                else:
+                    fixed_delay_filepath = self.input_fixed_delays
                 try:
                     fixed_delays = pd.read_csv(os.path.abspath(fixed_delay_filepath), names = ["IF0","IF1","IF2","IF3"],
                             header=None, skiprows=1)
@@ -442,11 +452,14 @@ class CalibrationGainCollector():
                     updated_fixed_delays[tune] = sub_updated_fixed_delays
 
                 #bit of logic here to remove the previous filestem from the name.
+                fixed_delay_file_loc = os.path.join((self.output_dir), ("fixed_delays/"))
+                if not os.path.exists(fixed_delay_file_loc):
+                    os.makedirs(fixed_delay_file_loc)
                 if '%' in fixed_delay_filepath:
-                    modified_fixed_delays_path = os.path.join((self.output_dir), ("fixed_delays/"), (os.path.splitext(os.path.basename(fixed_delay_filepath))[0].split('%')[1]+"%"+obs_id+".csv"))
+                    modified_fixed_delays_path = os.path.join(fixed_delay_file_loc, (os.path.splitext(os.path.basename(fixed_delay_filepath))[0].split('%')[1]+"%"+obs_id+".csv"))
                 #if first time running
                 else:
-                    modified_fixed_delays_path = os.path.join((self.output_dir), ("fixed_delays/"), (os.path.splitext(os.path.basename(fixed_delay_filepath))[0]+"%"+obs_id+".csv"))
+                    modified_fixed_delays_path = os.path.join(fixed_delay_file_loc, (os.path.splitext(os.path.basename(fixed_delay_filepath))[0]+"%"+obs_id+".csv"))
                 
                 self.log_and_post_slackmessage(f"""
                     Wrote out modified fixed delays to: 
@@ -465,38 +478,17 @@ class CalibrationGainCollector():
                 if not self.dry_run:
                     redis_publish_dict_to_hash(self.redis_obj, CALIBRATION_CACHE_HASH, {"fixed_delay":modified_fixed_delays_path})
                 
-                #-------------------------UPDATE THE FIXED PHASES-------------------------#
-                fixed_phase_filepath = redis_hget_keyvalues(self.redis_obj, CALIBRATION_CACHE_HASH)["fixed_phase"]
-                try:
-                    with open(fixed_phase_filepath, 'r') as f:
-                        fixed_phases = json.load(f)
-                except:
-                    self.log_and_post_slackmessage(f"""
-                        Could *not* read fixed phases from {fixed_phase_filepath} for updating with calculated residuals.
-                        Clearning up and aborting calibration process...
-                    """, severity = "ERROR")
-                    return
-                self.log_and_post_slackmessage(f"""
-                Modifying fixed-phases found in
-                ```{fixed_phase_filepath}```
-                with the *residual phases* calculated in
-                ```{phase_residual_filename}```
-                """)
-
-                #Add the phase residual to the fixed phases on hand:
-                updated_fixed_phases = {}
-                for ant, phases in fixed_phases.items():
-                    if ant in phase_residual_map:
-                        updated_fixed_phases[ant] = (np.array(phases,dtype=float) + phase_residual_map[ant]).tolist()
-                    else:
-                        updated_fixed_phases[ant] = phases
+                #-------------------------LOAD THE NEW FIXED PHASES-------------------------#
 
                 #bit of logic here to remove the previous filestem from the name.
+                fixed_phase_file_loc = os.path.join((self.output_dir), ("fixed_phases/"))
+                if not os.path.exists(fixed_phase_file_loc):
+                    os.makedirs(fixed_phase_file_loc)
                 if '%' in fixed_phase_filepath:
-                    modified_fixed_phases_path = os.path.join((self.output_dir), ("fixed_phases/"), (os.path.splitext(os.path.basename(fixed_phase_filepath))[0].split('%')[1]+"%"+obs_id+".json"))   
+                    modified_fixed_phases_path = os.path.join(fixed_phase_file_loc, (os.path.splitext(os.path.basename(fixed_phase_filepath))[0].split('%')[1]+"%"+obs_id+".json"))   
                 #if first time running
                 else:
-                    modified_fixed_phases_path = os.path.join((self.output_dir), ("fixed_phases/"), (os.path.splitext(os.path.basename(fixed_phase_filepath))[0]+"%"+obs_id+".json"))
+                    modified_fixed_phases_path = os.path.join(fixed_phase_file_loc, (os.path.splitext(os.path.basename(fixed_phase_filepath))[0]+"%"+obs_id+".json"))
 
                 self.log_and_post_slackmessage(f"""
                 Wrote out modified fixed phases to: 
@@ -504,17 +496,18 @@ class CalibrationGainCollector():
 
                 if not self.dry_run:
                     self.log_and_post_slackmessage("""Updating fixed-phases on *all* antenna now...""", severity = "INFO")
-                    self.update_antenna_phascals(updated_fixed_phases)
-                
+                    self.update_antenna_phascals(phase_cal_map)
+                    
+                t_phase_cal_map = self.dictnpy_to_dictlist(phase_cal_map)
                 with open(modified_fixed_phases_path, 'w+') as f:
-                    json.dump(updated_fixed_phases, f)
+                    json.dump(t_phase_cal_map, f)
                 #update the filepath for the latest fixed phase values
                 if not self.dry_run:
                     redis_publish_dict_to_hash(self.redis_obj, CALIBRATION_CACHE_HASH, {"fixed_phase":modified_fixed_phases_path})
 
                 #-------------------------PLOT GENERATION AND SAVING-------------------------#
-                delay_file_path, phase_file_path_ac, phase_file_path_bd = plot_delay_phase(delay_residual_map,updated_fixed_phases, 
-                        full_observation_channel_frequencies_hz,outdir = os.path.join(self.output_dir ,"calibration_plots"), outfilestem=obs_id)
+                delay_file_path, phase_file_path_ac, phase_file_path_bd = plot_delay_phase(delay_residual_map, phase_cal_map, 
+                        full_observation_channel_frequencies_hz, outdir = os.path.join(self.output_dir ,"calibration_plots"), outfilestem=obs_id)
 
                 self.log_and_post_slackmessage(f"""
                         Saved  residual delay plot to: 
@@ -579,13 +572,14 @@ if __name__ == "__main__":
     parser.add_argument("--tbin", type=float, default=1e-6, required=False, help="""tbin value for observation in seconds""")
     parser.add_argument('file', type=argparse.FileType('r'), nargs='*')
     args = parser.parse_args()
-
+    manual_run = False
     input_json_dict = {}
     if len(args.file) != 0:
         for f in args.file:
             input_json_dict.update(json.load(f))
         args.no_slack_post = True
         args.dry_run = True
+        manual_run = True
 
     slackbot = None
     if not args.no_slack_post:
@@ -599,11 +593,20 @@ if __name__ == "__main__":
         
     #if input fixed delay and fixed phase files are provided, publish them to the filepath hash    
     if args.fixed_delay_to_update is not None:
-        redis_publish_dict_to_hash(redis_obj, CALIBRATION_CACHE_HASH,{"fixed_delay":args.fixed_delay_to_update})
+        if manual_run:
+            input_fixed_delays = args.fixed_delay_to_update
+        else:
+            input_fixed_delays = None
+            redis_publish_dict_to_hash(redis_obj, CALIBRATION_CACHE_HASH,{"fixed_delay":args.fixed_delay_to_update})
     if args.fixed_phase_to_update is not None:
-        redis_publish_dict_to_hash(redis_obj, CALIBRATION_CACHE_HASH,{"fixed_phase":args.fixed_phase_to_update})
+        if manual_run:
+            input_fixed_phases = args.fixed_phase_to_update
+        else:
+            input_fixed_phases = None
+            redis_publish_dict_to_hash(redis_obj, CALIBRATION_CACHE_HASH,{"fixed_phase":args.fixed_phase_to_update})
 
     calibrationGainCollector = CalibrationGainCollector(redis_obj, output_dir = args.output_dir, hash_timeout = args.hash_timeout, dry_run = args.dry_run,
-                                re_arm_time = args.re_arm_time, fit_method = args.fit_method, slackbot = slackbot,
-                                input_json_dict = None if not bool(input_json_dict) else input_json_dict, input_fcents = args.fcentmhz, input_tbin = args.tbin)
+                                re_arm_time = args.re_arm_time, fit_method = args.fit_method, slackbot = slackbot, input_fixed_delays = input_fixed_delays,
+                                input_fixed_phases = input_fixed_phases, input_json_dict = None if not bool(input_json_dict) else input_json_dict,
+                                input_fcents = args.fcentmhz, input_tbin = args.tbin)
     calibrationGainCollector.start()
