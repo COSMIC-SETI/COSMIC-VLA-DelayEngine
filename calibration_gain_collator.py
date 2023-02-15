@@ -25,9 +25,9 @@ SERVICE_NAME = os.path.splitext(os.path.basename(__file__))[0]
 
 # create console handler and set level to debug
 ch = logging.StreamHandler()
-ch.setLevel(logging.INFO)
+ch.setLevel(logging.DEBUG)
 fh = RotatingFileHandler(LOGFILENAME, mode = 'a', maxBytes = 512, backupCount = 0, encoding = None, delay = False)
-fh.setLevel(logging.INFO)
+fh.setLevel(logging.DEBUG)
 
 # create formatter
 formatter = logging.Formatter("[%(asctime)s - %(levelname)s - %(filename)s:%(lineno)s] %(message)s")
@@ -350,7 +350,7 @@ class CalibrationGainCollector():
 
                 self.log_and_post_slackmessage("""
                 Plotting phase of the collected recorded gains...
-                """,severity="INFO")
+                """,severity="DEBUG")
 
                 phase_file_path_ac, phase_file_path_bd = plot_gain_phase(full_gains_map, full_observation_channel_frequencies_hz, fit_method = self.fit_method,
                                                                         outdir = os.path.join(self.output_dir ,"calibration_plots"), outfilestem=obs_id)
@@ -360,14 +360,14 @@ class CalibrationGainCollector():
                         `{phase_file_path_ac}`
                         and BD to:
                         `{phase_file_path_bd}`
-                        """, severity = "INFO")
+                        """, severity = "DEBUG")
                 
                 if self.slackbot is not None:
                     try:
                         self.slackbot.upload_file(phase_file_path_ac, title =f"Recorded phases (degrees) for tuning AC from\n`{obs_id}`")
                         self.slackbot.upload_file(phase_file_path_bd, title =f"Recorded phases (degrees) for tuning BD from\n`{obs_id}`")
                     except:
-                        self.log_and_post_slackmessage("Error uploading plots", severity="INFO")
+                        self.log_and_post_slackmessage("Error uploading plots", severity="WARNING")
 
                 if not manual_operation:
                     fixed_phase_filepath = redis_hget_keyvalues(self.redis_obj, CALIBRATION_CACHE_HASH)["fixed_phase"]
@@ -383,9 +383,10 @@ class CalibrationGainCollector():
                     """, severity = "ERROR")
                     return
                 self.log_and_post_slackmessage(f"""
-                Modifying fixed-phases found in
+                Subtracting fixed phases found in
                 ```{fixed_phase_filepath}```
-                """)
+                from the received gain matrix
+                """, severity = "INFO")
 
                 #calculate residual delays/phases for the collected frequencies
                 if self.fit_method == "linear":
