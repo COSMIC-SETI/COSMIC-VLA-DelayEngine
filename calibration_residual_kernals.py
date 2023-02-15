@@ -1,6 +1,6 @@
 import numpy as np
 
-def calc_residuals_from_polyfit(ant_to_gains, observation_frequencies, frequency_indices, current_phase_cals):
+def calc_residuals_from_polyfit(ant_to_gains, observation_frequencies, current_phase_cals, frequency_indices):
         """
         Accept mapping of antenna to gains along with the observation frequencies of dimension (n_tunings, n_chans). In the event 
         not all gains are received, a start and stop demarcate the region over which to calculate the fit.
@@ -12,7 +12,8 @@ def calc_residuals_from_polyfit(ant_to_gains, observation_frequencies, frequency
             observation_frequencies : list of frequencies in Hz of dimension (n_tunings, nchans)
             current_phase_cals : A mapping of antenna to phase coefficients (in radians) on the F-Engine at present - a matrix of dimension (n_streams, n_chans).
                     {<ant> : [[phase_cal_pol0_tune0], [phase_cal_pol1_tune0], [phase_cal_pol0_tune1], [phase_cal_pol1_tune1]], ...}
-            frequency_indices : indices of the collected gains in the full n_chans per tuning
+            frequency_indices : indices of the collected gains (sorted) in the full n_chans per tuning: 
+                            {tuning_idx : np.array(int)}
 
         Return:
             delay_residual_map : A mapping of antenna to delay residual values in nanoseconds of dimension (n_streams)
@@ -58,7 +59,7 @@ def calc_residuals_from_polyfit(ant_to_gains, observation_frequencies, frequency
 
         return delay_residual_map, phase_cal_map
 
-def calc_residuals_from_ifft(ant_to_gains, observation_frequencies, current_phase_cals):
+def calc_residuals_from_ifft(ant_to_gains, observation_frequencies, current_phase_cals, frequency_indices):
     """
     Accept mapping of antenna to gains.
     Returns ant to residual delay and ant to phase cal maps.
@@ -69,6 +70,9 @@ def calc_residuals_from_ifft(ant_to_gains, observation_frequencies, current_phas
         observation_frequencies : list of frequencies in Hz of dimension (n_tunings, nchans)
         current_phase_cals : A mapping of antenna to phase coefficients on the F-Engine at present - a matrix of dimension (n_streams, n_chans).
                     {<ant> : [[phase_cal_pol0_tune0], [phase_cal_pol1_tune0], [phase_cal_pol0_tune1], [phase_cal_pol1_tune1]], ...}
+        frequency_indices : indices of the collected gains (sorted) in the full n_chans per tuning: 
+                            {tuning_idx : np.array(int)}
+
     Return:
         delay_residual_map : A mapping of antenna to delay residual values in nanoseconds of dimension (n_streams)
                     {<ant> : [residual_delay_pol0_tune0, residual_delay_pol1_tune0, residual_delay_pol0_tune1, residual_delay_pol1_tune1]}, ...}
@@ -95,6 +99,8 @@ def calc_residuals_from_ifft(ant_to_gains, observation_frequencies, current_phas
         phase_cals = np.zeros(gain_matrix.shape,dtype=np.float64)
 
         for tune in range(nof_tunings):
+            #find range outside collected gains
+            uncollected_gain_range = np.setdiff1d(np.arange(observation_frequencies[tune,:].size), frequency_indices[tune], assume_unique = True)
             chan_width = observation_frequencies[tune,1] - observation_frequencies[tune,0]
             freqs = np.fft.fftfreq(nof_chan, chan_width)
             tlags = freqs*1e9
@@ -103,9 +109,9 @@ def calc_residuals_from_ifft(ant_to_gains, observation_frequencies, current_phas
                 stream_idx = int(str(tune)+str(pol),2)
                 residual_delays[stream_idx] = -1.0 * tlags[max_idxs[stream_idx]]
                 gain_from_residual_delay = np.exp(2j*np.pi*(observation_frequencies[tune,:]*1e-9)*residual_delays[stream_idx])
-                zero_gains_indices = np.where(gain_matrix[stream_idx,:]==0.0)
                 phase_cals[stream_idx] = np.angle(new_gain_matrix[stream_idx,:]/gain_from_residual_delay)
-                phase_cals[stream_idx, zero_gains_indices] = 0.0
+                #zero all phases outside the collected gains range
+                phase_cals[stream_idx, uncollected_gain_range] = 0.0
 
         delay_residual_map[ant] = residual_delays
         phase_cal_map[ant] = phase_cals

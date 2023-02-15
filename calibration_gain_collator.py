@@ -231,8 +231,7 @@ class CalibrationGainCollector():
 
         Returns:
             ant_gains_map : a dictionary mapping of {ant: [nof_streams, nof_frequencies]}
-            chan_start : integer index for the start frequency of those collected out of all observation channel frequencies
-            chan_stop : integer index for the stop frequency of those collected out of all observation channel frequencies
+            frequency_indices : a dictionary mapping of {tuning_idx : np.array(int)}
         """
         full_gains_map = {}
         sortings = {}
@@ -390,9 +389,11 @@ class CalibrationGainCollector():
 
                 #calculate residual delays/phases for the collected frequencies
                 if self.fit_method == "linear":
-                    delay_residual_map, phase_cal_map = calc_residuals_from_polyfit(full_gains_map, full_observation_channel_frequencies_hz,frequency_indices, fixed_phases)
+                    delay_residual_map, phase_cal_map = calc_residuals_from_polyfit(full_gains_map, full_observation_channel_frequencies_hz,
+                                                                                    fixed_phases, frequency_indices)
                 elif self.fit_method == "fourier":
-                    delay_residual_map, phase_cal_map = calc_residuals_from_ifft(full_gains_map,full_observation_channel_frequencies_hz, fixed_phases)
+                    delay_residual_map, phase_cal_map = calc_residuals_from_ifft(full_gains_map,full_observation_channel_frequencies_hz,
+                                                                                fixed_phases, frequency_indices)
 
                 #-------------------------SAVE RESIDUAL DELAYS-------------------------#
                 #For json dumping:
