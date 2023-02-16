@@ -140,8 +140,10 @@ class CalibrationGainCollector():
 
         self.log_and_post_slackmessage("Calibration process is armed and awaiting triggers from GPU nodes.", severity="INFO")
 
-        for message in pubsub.listen():
+        #Fetch message from subscribed channels
+        while True:
             redis_publish_service_pulse(self.redis_obj, SERVICE_NAME)
+            message = pubsub.get_message(timeout=0.001)
             if message is not None and isinstance(message, dict):
                 msg = json.loads(message.get('data'))
                 if message['channel'] == "observations":
