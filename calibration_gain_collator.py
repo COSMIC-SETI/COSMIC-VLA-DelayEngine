@@ -375,7 +375,7 @@ class CalibrationGainCollector():
                     fixed_phase_filepath = self.input_fixed_phases
                 try:
                     with open(fixed_phase_filepath, 'r') as f:
-                        fixed_phases = json.load(f)
+                        last_fixed_phases = json.load(f)
                 except:
                     self.log_and_post_slackmessage(f"""
                         Could *not* read fixed phases from {fixed_phase_filepath} for updating with calculated residuals.
@@ -391,10 +391,10 @@ class CalibrationGainCollector():
                 #calculate residual delays/phases for the collected frequencies
                 if self.fit_method == "linear":
                     delay_residual_map, phase_cal_map = calc_residuals_from_polyfit(full_gains_map, full_observation_channel_frequencies_hz,
-                                                                                    fixed_phases, frequency_indices)
+                                                                                    last_fixed_phases, frequency_indices)
                 elif self.fit_method == "fourier":
                     delay_residual_map, phase_cal_map = calc_residuals_from_ifft(full_gains_map,full_observation_channel_frequencies_hz,
-                                                                                fixed_phases, frequency_indices)
+                                                                                last_fixed_phases, frequency_indices)
 
                 #-------------------------SAVE RESIDUAL DELAYS-------------------------#
                 #For json dumping:
@@ -500,7 +500,7 @@ class CalibrationGainCollector():
                 # Update the fixed phases on the F-Engines and update the fixed_phase path
                 if not self.dry_run:
                     self.log_and_post_slackmessage("""Updating fixed-phases on *all* antenna now...""", severity = "INFO")
-                    self.update_antenna_phascals(phase_cal_map)
+                    self.update_antenna_phascals(t_phase_cal_map)
                     redis_publish_dict_to_hash(self.redis_obj, CALIBRATION_CACHE_HASH, {"fixed_phase":modified_fixed_phases_path})
                     
                 #-------------------------PLOT GENERATION AND SAVING-------------------------#
