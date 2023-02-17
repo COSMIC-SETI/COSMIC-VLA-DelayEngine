@@ -298,9 +298,16 @@ class CalibrationGainCollector():
             tune = int(tune)
             #per antenna, per tuning
             sorted_gains = gains[:,sortings[tune]]
-
-            full_gains_map[ant][tune*2, frequency_indices[tune]] = sorted_gains[0]
-            full_gains_map[ant][(tune*2)+1, frequency_indices[tune]] = sorted_gains[1]
+            try:
+                full_gains_map[ant][tune*2, frequency_indices[tune]] = sorted_gains[0]
+                full_gains_map[ant][(tune*2)+1, frequency_indices[tune]] = sorted_gains[1]
+            except:
+                self.log_and_post_slackmessage(f"""
+                Could not place received frequencies within expected observation frequencies.
+                This likely occured due to the collected fcent not matching fcent used in recording.
+                Ignoring run.
+                """,severity = "ERROR", is_reply = True)
+                return None, None
 
         return full_gains_map, frequency_indices
 
@@ -362,7 +369,9 @@ class CalibrationGainCollector():
                     ant_tune_to_collected_gains, collected_frequencies, 
                     full_observation_channel_frequencies_hz
                 )
-
+                if full_gains_map is None:
+                    continue
+                
                 self.log_and_post_slackmessage("""
                 Plotting phase of the collected recorded gains...
                 """,severity="DEBUG")
