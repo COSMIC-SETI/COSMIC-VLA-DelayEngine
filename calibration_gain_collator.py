@@ -315,8 +315,8 @@ class CalibrationGainCollector():
 
                 #FOR SPOOFING - TEMPORARY AND NEEDS TO BE SMARTER:
                 self.basebands = [
-                    "AC_8BIT",
-                    "BD_8BIT"
+                    "AC",
+                    "BD"
                     ]
 
                 #Start function that waits for hash_timeout before collecting redis hash.

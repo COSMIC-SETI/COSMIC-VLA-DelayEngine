@@ -83,37 +83,41 @@ def calc_residuals_from_ifft(ant_to_gains, observation_frequencies, current_phas
     delay_residual_map = {}
     phase_cal_map = {}
 
-    for ant, gain_matrix in ant_to_gains.items():
-        gain_matrix = np.array(gain_matrix, dtype = np.complex64)
+    for ant, phase_matrix in current_phase_cals.items():
+        phase_matrix = np.array(phase_matrix,dtype=float)
+        if ant in ant_to_gains.keys():
+            gain_matrix = np.array(ant_to_gains[ant], dtype = np.complex64)
 
-        #Subtract the last applied phases from the gain (incase incorrect)
-        current_phase_matrix = np.exp(1j * np.array(current_phase_cals[ant]))
-        new_gain_matrix = gain_matrix * current_phase_matrix
+            #Subtract the last applied phases from the gain (incase incorrect)
+            current_phase_matrix = np.exp(1j * np.array(phase_matrix))
+            new_gain_matrix = gain_matrix * current_phase_matrix
 
-        nof_streams = gain_matrix.shape[0]
-        nof_tunings,nof_chan = observation_frequencies.shape
-        nof_pols = int(nof_streams/nof_tunings)
-        ifft_abs_matrix = np.abs(np.fft.ifft(new_gain_matrix, axis = 1))
-        max_idxs = np.argmax(ifft_abs_matrix,axis=1)
-        residual_delays = np.zeros(nof_streams,dtype=np.float64)
-        phase_cals = np.zeros(gain_matrix.shape,dtype=np.float64)
+            nof_streams = gain_matrix.shape[0]
+            nof_tunings,nof_chan = observation_frequencies.shape
+            nof_pols = int(nof_streams/nof_tunings)
+            ifft_abs_matrix = np.abs(np.fft.ifft(new_gain_matrix, axis = 1))
+            max_idxs = np.argmax(ifft_abs_matrix,axis=1)
+            residual_delays = np.zeros(nof_streams,dtype=np.float64)
+            phase_cals = np.zeros(gain_matrix.shape,dtype=np.float64)
 
-        for tune in range(nof_tunings):
-            #find range outside collected gains
-            uncollected_gain_range = np.setdiff1d(np.arange(observation_frequencies[tune,:].size), frequency_indices[tune], assume_unique = True)
-            chan_width = observation_frequencies[tune,1] - observation_frequencies[tune,0]
-            freqs = np.fft.fftfreq(nof_chan, chan_width)
-            tlags = freqs*1e9
-            for pol in range(nof_pols):   #probably unecessary - could do with some matrix mult stuff
-                #some binary logic
-                stream_idx = int(str(tune)+str(pol),2)
-                residual_delays[stream_idx] = -1.0 * tlags[max_idxs[stream_idx]]
-                gain_from_residual_delay = np.exp(2j*np.pi*(observation_frequencies[tune,:]*1e-9)*residual_delays[stream_idx])
-                phase_cals[stream_idx] = np.angle(new_gain_matrix[stream_idx,:]/gain_from_residual_delay)
-                #zero all phases outside the collected gains range
-                phase_cals[stream_idx, uncollected_gain_range] = 0.0
-
-        delay_residual_map[ant] = residual_delays
-        phase_cal_map[ant] = phase_cals
+            for tune in range(nof_tunings):
+                #find range outside collected gains
+                uncollected_gain_range = np.setdiff1d(np.arange(observation_frequencies[tune,:].size), frequency_indices[tune], assume_unique = True)
+                chan_width = observation_frequencies[tune,1] - observation_frequencies[tune,0]
+                freqs = np.fft.fftfreq(nof_chan, chan_width)
+                tlags = freqs*1e9
+                for pol in range(nof_pols):   #probably unecessary - could do with some matrix mult stuff
+                    #some binary logic
+                    stream_idx = int(str(tune)+str(pol),2)
+                    residual_delays[stream_idx] = -1.0 * tlags[max_idxs[stream_idx]]
+                    gain_from_residual_delay = np.exp(2j*np.pi*(observation_frequencies[tune,:]*1e-9)*residual_delays[stream_idx])
+                    phase_cals[stream_idx] = np.angle(new_gain_matrix[stream_idx,:]/gain_from_residual_delay)
+                    #zero all phases outside the collected gains range
+                    phase_cals[stream_idx, uncollected_gain_range] = 0.0
+            delay_residual_map[ant] = residual_delays
+            phase_cal_map[ant] = phase_cals
+            
+        else:
+            phase_cal_map[ant] = phase_matrix
 
     return delay_residual_map, phase_cal_map
