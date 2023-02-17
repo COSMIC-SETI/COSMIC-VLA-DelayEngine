@@ -58,6 +58,7 @@ class CalibrationGainCollector():
         self.fit_method = fit_method
         self.dry_run = dry_run
         self.slackbot = slackbot
+        self.slack_message_ts = None
         self.input_fixed_delays = input_fixed_delays
         self.input_fixed_phases = input_fixed_phases
         self.input_json_dict = input_json_dict
@@ -104,24 +105,28 @@ class CalibrationGainCollector():
             dictlst[key] = dictnpy[key].tolist()
         return dictlst
 
-    def log_and_post_slackmessage(self, message, severity = "INFO"):
-        if severity =="INFO":
-            logger.info(message)
-            if self.slackbot is not None:
-                self.slackbot.post_message(dedent("\
-                    INFO:\n" + message))
-        if severity =="WARN":
-            logger.warn(message)
-            if self.slackbot is not None:
-                self.slackbot.post_message(dedent("\
-                    WARNING:\n" + message))
-        if severity =="ERROR":
-            logger.error(message)
-            if self.slackbot is not None:
-                self.slackbot.post_message(dedent("\
-                    ERROR:\n" + message))
-        if severity == "DEBUG":
-            logger.debug(message)
+    def log_and_post_slackmessage(self, message, severity = "INFO", new_message = True, update_message = False):
+        try:
+            level = getattr(logging, severity)
+            logger.log(level, message)
+            if level == 10: 
+                return
+        except: 
+            logger.error(f"Invalid severity specified: {severity}.")
+
+        if self.slackbot is not None:   
+            if new_message:
+                self.slack_message_ts = self.slackbot.last_message_ts
+                self.slackbot.post_message(dedent(f"\
+                        {severity}:\n" + message))
+            elif update_message:
+                self.slackbot.update_message(dedent(f"\
+                    {severity}:\n" + message),
+                    ts=self.slack_message_ts,
+                )
+            else:
+                self.slackbot.post_message(dedent(f"\
+                    {severity}:\n" + message), thread_ts=self.slack_message_ts)
 
     def await_trigger(self):
         pubsub = self.redis_obj.pubsub(ignore_subscribe_messages=True)
@@ -591,19 +596,17 @@ if __name__ == "__main__":
         slackbot.post_message(f"""
         Starting calibration observation process...""")
         
-    #if input fixed delay and fixed phase files are provided, publish them to the filepath hash    
-    if args.fixed_delay_to_update is not None:
-        if manual_run:
-            input_fixed_delays = args.fixed_delay_to_update
-        else:
+    #if input fixed delay and fixed phase files are provided, publish them to the filepath hash
+    input_fixed_delays = args.fixed_delay_to_update    
+    if input_fixed_delays is not None:
+        if not manual_run:
+            redis_publish_dict_to_hash(redis_obj, CALIBRATION_CACHE_HASH,{"fixed_delay":input_fixed_delays})
             input_fixed_delays = None
-            redis_publish_dict_to_hash(redis_obj, CALIBRATION_CACHE_HASH,{"fixed_delay":args.fixed_delay_to_update})
-    if args.fixed_phase_to_update is not None:
-        if manual_run:
-            input_fixed_phases = args.fixed_phase_to_update
-        else:
+    input_fixed_phases = args.fixed_phase_to_update
+    if input_fixed_phases is not None:
+        if not  manual_run:
+            redis_publish_dict_to_hash(redis_obj, CALIBRATION_CACHE_HASH,{"fixed_phase":input_fixed_phases})
             input_fixed_phases = None
-            redis_publish_dict_to_hash(redis_obj, CALIBRATION_CACHE_HASH,{"fixed_phase":args.fixed_phase_to_update})
 
     calibrationGainCollector = CalibrationGainCollector(redis_obj, output_dir = args.output_dir, hash_timeout = args.hash_timeout, dry_run = args.dry_run,
                                 re_arm_time = args.re_arm_time, fit_method = args.fit_method, slackbot = slackbot, input_fixed_delays = input_fixed_delays,
