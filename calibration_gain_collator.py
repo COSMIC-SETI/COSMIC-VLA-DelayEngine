@@ -105,7 +105,7 @@ class CalibrationGainCollector():
             dictlst[key] = dictnpy[key].tolist()
         return dictlst
 
-    def log_and_post_slackmessage(self, message, severity = "INFO", new_message = True, update_message = False):
+    def log_and_post_slackmessage(self, message, severity = "INFO", is_reply = False, update_message = False):
         try:
             level = getattr(logging, severity)
             logger.log(level, message)
@@ -115,10 +115,9 @@ class CalibrationGainCollector():
             logger.error(f"Invalid severity specified: {severity}.")
 
         if self.slackbot is not None:   
-            if new_message:
-                self.slack_message_ts = self.slackbot.last_message_ts
+            if is_reply:
                 self.slackbot.post_message(dedent(f"\
-                        {severity}:\n" + message))
+                    {severity}:\n" + message), thread_ts=self.slack_message_ts)
             elif update_message:
                 self.slackbot.update_message(dedent(f"\
                     {severity}:\n" + message),
@@ -126,7 +125,8 @@ class CalibrationGainCollector():
                 )
             else:
                 self.slackbot.post_message(dedent(f"\
-                    {severity}:\n" + message), thread_ts=self.slack_message_ts)
+                        {severity}:\n" + message))
+                self.slack_message_ts = self.slackbot.last_message_ts
 
     def await_trigger(self):
         pubsub = self.redis_obj.pubsub(ignore_subscribe_messages=True)
@@ -136,14 +136,17 @@ class CalibrationGainCollector():
             self.log_and_post_slackmessage(f"""
                 Unable to subscribe to {GPU_GAINS_REDIS_CHANNEL} 
                 channel to listen for changes to {GPU_GAINS_REDIS_HASH}.""",
-            severity="ERROR")
+            severity="ERROR", is_reply = True)
             return False
         try:
             pubsub.subscribe("observations")
-        except:
-            self.log_and_post_slackmessage(f'Subscription to "observations" unsuccessful.',severity = "ERROR")
+        except redis.RedisError:
+            self.log_and_post_slackmessage(f'Subscription to "observations" unsuccessful.',severity = "ERROR",
+                                           is_reply = True)
+            return False
 
-        self.log_and_post_slackmessage("Calibration process is armed and awaiting triggers from GPU nodes.", severity="INFO")
+        self.log_and_post_slackmessage("Calibration process is armed and awaiting triggers from GPU nodes.",
+                                       severity="INFO", is_reply = False)
 
         #Fetch message from subscribed channels
         while True:
@@ -155,7 +158,7 @@ class CalibrationGainCollector():
                     if msg['postprocess'] == "calibrate-uvh5":
                         self.log_and_post_slackmessage(f"""
                         Received message indicating calibration observation is starting.
-                        Collected mcast metadata now...""", severity = "INFO")
+                        Collected mcast metadata now...""", severity = "INFO", is_reply = True)
                         self.meta_obs = redis_hget_keyvalues(self.redis_obj, "META")
                         continue
                 if message['channel'] == GPU_GAINS_REDIS_CHANNEL:
@@ -202,8 +205,10 @@ class CalibrationGainCollector():
             obs_id_t = payload['obs_id']
             if obs_id is not None and obs_id_t != obs_id:
                 self.log_and_post_slackmessage(f"""
-                    Skipping {start_freq_tune} payload since it contains differing obs_id {obs_id_t}
-                    to previously encountered obs_id {obs_id}.""", severity="WARNING")
+                    Skipping {start_freq_tune} payload from GPU node since it contains differing obs_id 
+                    {obs_id_t}
+                    to previously encountered obs_id
+                    {obs_id}.""", severity="WARNING", is_reply = True)
                 continue
             else:
                 obs_id = obs_id_t
@@ -279,7 +284,7 @@ class CalibrationGainCollector():
             log_message += f"""\n
             No values received for tuning 1, and so no residuals will be calculated for that tuning."""
         log_message += "\n-------------------------------------------------------------"
-        self.log_and_post_slackmessage(log_message, severity="INFO")
+        self.log_and_post_slackmessage(log_message, severity="INFO", is_reply=True)
 
         #Initialise full ant_gains_map
         gain_zeros = np.zeros((self.nof_streams, self.nof_channels),dtype=np.complex64)
@@ -311,12 +316,13 @@ class CalibrationGainCollector():
                 trigger = True
             if trigger:
                 self.log_and_post_slackmessage(f"""
-                    Calibration process has been triggered.\n
+                    Calibration process has been triggered and is starting.\n
                     Manual run = `{manual_operation}`, 
                     Dry run = `{self.dry_run}`,
-                    hash timeout = `{self.hash_timeout}`s, re-arm time = `{self.re_arm_time}`s,
+                    hash timeout = `{self.hash_timeout}s`, re-arm time = `{self.re_arm_time}s`,
                     fitting method = `{self.fit_method}`,
-                    output directory = `{self.output_dir}`""", severity = "INFO")
+                    output directory = `{self.output_dir}`""", severity = "INFO",
+                    is_reply=False, update_message=True)
 
                 #FOR SPOOFING - TEMPORARY AND NEEDS TO BE SMARTER:
                 self.basebands = [
@@ -336,12 +342,14 @@ class CalibrationGainCollector():
                     
                 channel_bw = 1/tbin
                 fcent_hz = fcents_mhz*1e6
-                
+                self.source = self.meta_obs["src"]
+
                 self.log_and_post_slackmessage(f"""
                     Observation meta reports:
+                    `source = {self.source}`
                     `basebands = {self.basebands}`
                     `fcents = {fcents_mhz} MHz`
-                    `tbin = {tbin}`""", severity = "INFO")
+                    `tbin = {tbin}`""", severity = "INFO", is_reply=True)
 
                 full_observation_channel_frequencies_hz = np.vstack((
                     np.arange(fcent_hz[0] - (self.nof_channels//2)*channel_bw,
@@ -360,7 +368,8 @@ class CalibrationGainCollector():
                 """,severity="DEBUG")
 
                 phase_file_path_ac, phase_file_path_bd = plot_gain_phase(full_gains_map, full_observation_channel_frequencies_hz, fit_method = self.fit_method,
-                                                                        outdir = os.path.join(self.output_dir ,"calibration_plots"), outfilestem=obs_id)
+                                                                        outdir = os.path.join(self.output_dir ,"calibration_plots"), outfilestem=obs_id,
+                                                                        source_name = self.source)
 
                 self.log_and_post_slackmessage(f"""
                         Saved recorded gain phase for tuning AC to: 
@@ -371,10 +380,12 @@ class CalibrationGainCollector():
                 
                 if self.slackbot is not None:
                     try:
-                        self.slackbot.upload_file(phase_file_path_ac, title =f"Recorded phases (degrees) for tuning AC from\n`{obs_id}`")
-                        self.slackbot.upload_file(phase_file_path_bd, title =f"Recorded phases (degrees) for tuning BD from\n`{obs_id}`")
+                        self.slackbot.upload_file(phase_file_path_ac, title =f"Recorded phases (degrees) for tuning AC from\n`{obs_id}`",
+                                                thread_ts = self.slack_message_ts)
+                        self.slackbot.upload_file(phase_file_path_bd, title =f"Recorded phases (degrees) for tuning BD from\n`{obs_id}`",
+                                                thread_ts = self.slack_message_ts)
                     except:
-                        self.log_and_post_slackmessage("Error uploading plots", severity="WARNING")
+                        self.log_and_post_slackmessage("Error uploading plots", severity="WARNING", is_reply=True)
 
                 if not manual_operation:
                     fixed_phase_filepath = redis_hget_keyvalues(self.redis_obj, CALIBRATION_CACHE_HASH)["fixed_phase"]
@@ -386,14 +397,14 @@ class CalibrationGainCollector():
                 except:
                     self.log_and_post_slackmessage(f"""
                         Could *not* read fixed phases from {fixed_phase_filepath} for updating with calculated residuals.
-                        Clearning up and aborting calibration process...
-                    """, severity = "ERROR")
+                        Cleaning up and aborting calibration process...
+                    """, severity = "ERROR", is_reply= True)
                     return
                 self.log_and_post_slackmessage(f"""
                 Subtracting fixed phases found in
                 ```{fixed_phase_filepath}```
                 from the received gain matrix
-                """, severity = "INFO")
+                """, severity = "INFO", is_reply=True)
 
                 #calculate residual delays/phases for the collected frequencies
                 if self.fit_method == "linear":
@@ -426,7 +437,7 @@ class CalibrationGainCollector():
                     `{obs_id}`:
 
                     ```{pretty_print_json}```
-                    """, severity = "INFO")
+                    """, severity = "INFO", is_reply=True)
 
                 #-------------------------UPDATE THE FIXED DELAYS-------------------------#
                 if not manual_operation:
@@ -440,14 +451,14 @@ class CalibrationGainCollector():
                     self.log_and_post_slackmessage(f"""
                         Could *not* read fixed delays from {fixed_delay_filepath} for updating with calculated residuals.
                         Clearning up and aborting calibration process...
-                    """, severity = "ERROR")
+                    """, severity = "ERROR", is_reply=True)
                     return
                 self.log_and_post_slackmessage(f"""
                 Modifying fixed-delays found in
                 ```{fixed_delay_filepath}```
                 with the *residual delays* calculated above in
                 ```{delay_residual_filename}```
-                """)
+                """,severity="INFO", is_reply=True)
                 fixed_delays = fixed_delays.to_dict()
                 updated_fixed_delays = {}
                 for i, tune in enumerate(list(fixed_delays.keys())):
@@ -472,14 +483,14 @@ class CalibrationGainCollector():
                 self.log_and_post_slackmessage(f"""
                     Wrote out modified fixed delays to: 
                     ```{modified_fixed_delays_path}```
-                    """, severity = "INFO")
+                    """, severity = "INFO", is_reply=True)
 
                 df = pd.DataFrame.from_dict(updated_fixed_delays)
                 df.to_csv(modified_fixed_delays_path)
 
                 #Publish new fixed delays to FEngines:
                 if not self.dry_run:
-                    self.log_and_post_slackmessage("""Updating fixed-delays on *all* antenna now...""", severity = "INFO")
+                    self.log_and_post_slackmessage("""Updating fixed-delays on *all* antenna now...""", severity = "INFO", is_reply=True)
                     self.delay_calibration.calib_csv = modified_fixed_delays_path
                     self.delay_calibration.run()
                     redis_publish_dict_to_hash(self.redis_obj, CALIBRATION_CACHE_HASH, {"fixed_delay":modified_fixed_delays_path})
@@ -498,7 +509,7 @@ class CalibrationGainCollector():
 
                 self.log_and_post_slackmessage(f"""
                 Wrote out modified fixed phases to: 
-                ```{modified_fixed_phases_path}```""", severity = "INFO")
+                ```{modified_fixed_phases_path}```""", severity = "INFO", is_reply=True)
 
                 t_phase_cal_map = self.dictnpy_to_dictlist(phase_cal_map)
                 with open(modified_fixed_phases_path, 'w+') as f:
@@ -506,13 +517,14 @@ class CalibrationGainCollector():
 
                 # Update the fixed phases on the F-Engines and update the fixed_phase path
                 if not self.dry_run:
-                    self.log_and_post_slackmessage("""Updating fixed-phases on *all* antenna now...""", severity = "INFO")
+                    self.log_and_post_slackmessage("""Updating fixed-phases on *all* antenna now...""", severity = "INFO", is_reply=True)
                     self.update_antenna_phascals(t_phase_cal_map)
                     redis_publish_dict_to_hash(self.redis_obj, CALIBRATION_CACHE_HASH, {"fixed_phase":modified_fixed_phases_path})
                     
                 #-------------------------PLOT GENERATION AND SAVING-------------------------#
                 delay_file_path, phase_file_path_ac, phase_file_path_bd = plot_delay_phase(delay_residual_map, phase_cal_map, 
-                        full_observation_channel_frequencies_hz, outdir = os.path.join(self.output_dir ,"calibration_plots"), outfilestem=obs_id)
+                        full_observation_channel_frequencies_hz, outdir = os.path.join(self.output_dir ,"calibration_plots"), outfilestem=obs_id,
+                        source_name = self.source)
 
                 self.log_and_post_slackmessage(f"""
                         Saved  residual delay plot to: 
@@ -525,11 +537,17 @@ class CalibrationGainCollector():
 
                 if self.slackbot is not None:
                     try:
-                        self.slackbot.upload_file(delay_file_path, title =f"Residual delays (ns) per antenna calculated from\n`{obs_id}`")
-                        self.slackbot.upload_file(phase_file_path_ac, title =f"Phases (degrees) per frequency (Hz) for tuning AC calculated from\n`{obs_id}`")
-                        self.slackbot.upload_file(phase_file_path_bd, title =f"Phases (degrees) per frequency (Hz) for tuning BD calculated from\n`{obs_id}`")
+                        self.slackbot.upload_file(delay_file_path,
+                                                title =f"Residual delays (ns) per antenna calculated from\n`{obs_id}`",
+                                                thread_ts = self.slack_message_ts)
+                        self.slackbot.upload_file(phase_file_path_ac,
+                                                title =f"Phases (degrees) per frequency (Hz) for tuning AC calculated from\n`{obs_id}`",
+                                                thread_ts = self.slack_message_ts)
+                        self.slackbot.upload_file(phase_file_path_bd,
+                                                title =f"Phases (degrees) per frequency (Hz) for tuning BD calculated from\n`{obs_id}`",
+                                                thread_ts = self.slack_message_ts)
                     except:
-                        self.log_and_post_slackmessage("Error uploading plots", severity="INFO")
+                        self.log_and_post_slackmessage("Error uploading plots", severity="WARNING", is_reply=True)
                 if manual_operation:
                     self.log_and_post_slackmessage(f"""
                     Manual calibration process run complete.
@@ -538,17 +556,29 @@ class CalibrationGainCollector():
                 else:
                     #Sleep
                     self.log_and_post_slackmessage(f"""
-                        Done!
-
                         Sleeping for {self.re_arm_time}s. 
                         Will not detect any channel triggers during this time.
-                        """, severity = "INFO")
+                        """, severity = "INFO",is_reply=True)
                     time.sleep(self.re_arm_time)
+                    self.log_and_post_slackmessage(f"""
+                        Calibration run for
+                        `{obs_id}`
+                        is complete!
+                        Test run = `{manual_operation}`, 
+                        Dry run = `{self.dry_run}`,
+                        hash timeout = `{self.hash_timeout}s`, re-arm time = `{self.re_arm_time}s`,
+                        fitting method = `{self.fit_method}`,
+                        results directory = `{self.output_dir}`
+                    """, severity="INFO", is_reply=False, update_message=True)
                     self.log_and_post_slackmessage(f"""
                         Clearing redis hash: {GPU_GAINS_REDIS_HASH} contents in anticipation of next calibration run.
                         """,severity = "DEBUG")
                     redis_clear_hash_contents(self.redis_obj, GPU_GAINS_REDIS_HASH)
-            
+            else:
+                self.log_and_post_slackmessage(f"""
+                Issue waiting on trigger from GPU nodes. Aborting calibration proces...
+                """, severity = "ERROR", is_reply = False, update_message = True)
+                exit(0)
 
 if __name__ == "__main__":
 

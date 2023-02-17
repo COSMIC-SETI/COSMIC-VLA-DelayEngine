@@ -4,14 +4,13 @@ edited by Talon Myburgh.
 22/01/2023
 """
 
-import sys
 import os
 import numpy as np
 import matplotlib.pyplot as plt
 import json
 import argparse
 
-def plot_gain_phase(ant_to_gains, observation_frequencies, fit_method="linear", outdir=None, outfilestem=None):
+def plot_gain_phase(ant_to_gains, observation_frequencies, fit_method="linear", outdir=None, outfilestem=None, source_name=None):
     """
     Plot the phase of the received complex gain values per antenna. In the event that
     the fitting method is "linear", unwrap the phases, before plotting.
@@ -19,6 +18,13 @@ def plot_gain_phase(ant_to_gains, observation_frequencies, fit_method="linear", 
     Args:
         ant_to_gains : {<ant> : [[complex(gains_pol0_tune0)], [complex(gains_pol1_tune0)], [complex(gains_pol0_tune1)], [complex(gains_pol1_tune1)]], ...}
         observation_frequencies : list of dimension (n_tunings, nchans) in Hz
+        fit_method : str indicating the fit method used in the calibration run
+        outdir : str directory path to save the plots to
+        outfilestem : str filename stem to use
+        source_name : str name of source to use in plot title
+    Returns:
+        phase_file_path_ac : str filepath to the phase vs freq plot for ac tuning
+        phase_file_path_bd : str filepath to the phase vs freq plot for bd tuning
     """
     if outdir is not None and not os.path.exists(outdir):
         os.makedirs(outdir)
@@ -47,7 +53,7 @@ def plot_gain_phase(ant_to_gains, observation_frequencies, fit_method="linear", 
                 axs[i,j].set_title(f"{antennas[ant_ind]}_AC")
                 axs[i,j].legend(loc = 'upper right')
 
-    fig.suptitle(f"Recorded Phase vs Freq\nfrom {outfilestem}\nfor tuning AC")
+    fig.suptitle(f"Recorded Phase vs Freq from\n {outfilestem}\nfor source {source_name} and  tuning AC")
     fig.supylabel("Phase (degrees)")
     fig.supxlabel("Frequency Channels")
 
@@ -82,7 +88,7 @@ def plot_gain_phase(ant_to_gains, observation_frequencies, fit_method="linear", 
                 axs[i,j].set_title(f"{antennas[ant_ind]}_BD")
                 axs[i,j].legend(loc = 'upper right')
 
-    fig.suptitle(f"Recorded Phase vs Freq\nfrom {outfilestem}\nfor tuning BD")
+    fig.suptitle(f"Recorded Phase vs Freq from\n {outfilestem}\nfor source {source_name} and tuning BD")
     fig.supylabel("Phase (degrees)")
     fig.supxlabel("Frequency Channels")
 
@@ -101,7 +107,8 @@ def plot_gain_phase(ant_to_gains, observation_frequencies, fit_method="linear", 
 
     return phase_file_path_ac, phase_file_path_bd
 
-def plot_delay_phase(residual_delays_dict, residual_phase_dict, frequency_matrix, outdir=None, outfilestem=None):
+def plot_delay_phase(residual_delays_dict, phase_dict, frequency_matrix, outdir=None, outfilestem=None,
+                    source_name=None):
     """
     Function to collect the delay and phase information
     from the residual files generated after the calibration step
@@ -113,7 +120,7 @@ def plot_delay_phase(residual_delays_dict, residual_phase_dict, frequency_matrix
         frequency_matrix     : full observation channel frequencies dims(nof_tunings, nof_frequencies)
         outdir               : output directory to which to save the plots
         outfilestem          : string to prefix to the plot filename
-
+        source_name          : string name of source to use in plot title
     Returns:
         delay_file_path : str filepath to the residual delay vs ant png plot
         phase_file_path_ac : str filepath to the phase vs freq plot for ac tuning
@@ -127,7 +134,7 @@ def plot_delay_phase(residual_delays_dict, residual_phase_dict, frequency_matrix
 
     if antennas is not None:
         test_delay = residual_delays_dict[antennas[0]]
-        test_phase = residual_phase_dict[antennas[0]]
+        test_phase = phase_dict[antennas[0]]
     else:
         print("No antenna key in the files")
         return
@@ -142,7 +149,7 @@ def plot_delay_phase(residual_delays_dict, residual_phase_dict, frequency_matrix
     # Grabing the values
     for i, ant in enumerate(antennas):
         delay_dat[i,:] = residual_delays_dict[ant]
-        phase_dat[i,...] = residual_phase_dict[ant]
+        phase_dat[i,...] = phase_dict[ant]
     
     #wrap phases:
     phase_dat = (phase_dat + np.pi)%(2*np.pi) - np.pi
@@ -167,8 +174,9 @@ def plot_delay_phase(residual_delays_dict, residual_phase_dict, frequency_matrix
     ax[1].set_ylim(-5, 5)
     
     fig.suptitle(f"""
-    Calculated Residual delay for:
-    {outfilestem}""")
+    Calculated Residual delay from
+    {outfilestem}
+    for source {source_name}""")
     fig.supylabel("Residual Delays (ns)")
     fig.supxlabel("Antennas")
 
@@ -200,7 +208,7 @@ def plot_delay_phase(residual_delays_dict, residual_phase_dict, frequency_matrix
                 axs[i,j].set_title(f"{antennas[ant_ind]}_AC")
                 axs[i,j].legend(loc = 'upper right')
     
-    fig.suptitle(f"Calculated Phase Calibration Coefficients vs Freq\nfrom{outfilestem}\nfor tuning AC")
+    fig.suptitle(f"Calculated Phase Calibration Coefficients vs Freq from\n{outfilestem}\nfor source {source_name} and tuning AC")
     fig.supylabel("Phase (degrees)")
     fig.supxlabel("Frequency Channels")
 
@@ -228,7 +236,7 @@ def plot_delay_phase(residual_delays_dict, residual_phase_dict, frequency_matrix
                 axs[i,j].set_title(f"{antennas[ant_ind]}_BD")
                 axs[i,j].legend(loc = 'upper right')
             
-    fig.suptitle(f"Calculated Phase Calibration Coefficients vs Freq\nfrom{outfilestem}\nfor tuning BD")
+    fig.suptitle(f"Calculated Phase Calibration Coefficients vs Freq from\n{outfilestem}\nfor source {source_name} and tuning BD")
     fig.supylabel("Phase (degrees)")
     fig.supxlabel("Frequency Channels")
 
