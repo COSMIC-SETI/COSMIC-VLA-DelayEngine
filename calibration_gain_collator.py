@@ -48,11 +48,11 @@ GPU_GAINS_REDIS_CHANNEL = "gpu_calibrationgains"
 CALIBRATION_CACHE_HASH = "CAL_fixedValuePaths"
 
 class CalibrationGainCollector():
-    def __init__(self, redis_obj, output_dir, hash_timeout=20, re_arm_time = 30, fit_method = "linear", dry_run = False,
+    def __init__(self, redis_obj, user_output_dir, hash_timeout=20, re_arm_time = 30, fit_method = "linear", dry_run = False,
     nof_streams = 4, nof_tunings = 2, nof_pols = 2, nof_channels = 1024, slackbot=None, input_fixed_delays = None, input_fixed_phases = None,
     input_json_dict = None, input_fcents = None, input_tbin = None):
         self.redis_obj = redis_obj
-        self.output_dir = output_dir
+        self.user_output_dir = user_output_dir
         self.hash_timeout = hash_timeout
         self.re_arm_time = re_arm_time
         self.fit_method = fit_method
@@ -68,6 +68,8 @@ class CalibrationGainCollector():
         self.nof_channels = nof_channels
         self.nof_tunings = nof_tunings
         self.nof_pols = nof_pols
+        self.projid = None
+        self.dataset = None    
         self.meta_obs = redis_hget_keyvalues(self.redis_obj, "META")
         self.ant_feng_map = ant_remotefeng_map.get_antennaFengineDict(self.redis_obj)
         if not self.dry_run:
@@ -159,6 +161,8 @@ class CalibrationGainCollector():
                         self.log_and_post_slackmessage(f"""
                         Received message indicating calibration observation is starting.
                         Collected mcast metadata now...""", severity = "INFO", is_reply = True)
+                        self.projid = msg['project_id']
+                        self.dataset = msg['dataset_id']
                         self.meta_obs = redis_hget_keyvalues(self.redis_obj, "META")
                         continue
                 if message['channel'] == GPU_GAINS_REDIS_CHANNEL:
@@ -328,7 +332,9 @@ class CalibrationGainCollector():
                     Dry run = `{self.dry_run}`,
                     hash timeout = `{self.hash_timeout}s`, re-arm time = `{self.re_arm_time}s`,
                     fitting method = `{self.fit_method}`,
-                    output directory = `{self.output_dir}`""", severity = "INFO",
+                    output directory = `{self.user_output_dir}`,
+                    projid = {self.projid},
+                    dataset_id = {self.dataset}""", severity = "INFO",
                     is_reply=False, update_message=True)
 
                 #FOR SPOOFING - TEMPORARY AND NEEDS TO BE SMARTER:
@@ -339,6 +345,9 @@ class CalibrationGainCollector():
 
                 #Start function that waits for hash_timeout before collecting redis hash.
                 ant_tune_to_collected_gains, collected_frequencies, self.ants, obs_id = self.collect_phases_for_hash_timeout(self.hash_timeout, manual_operation = manual_operation) 
+                
+                #Update output_dir to contain projid, dataset_id and obs_id
+                output_dir = self.user_output_dir if manual_operation else os.path.join(self.user_output_dir, self.projid, self.dataset, obs_id, "calibration")
 
                 if manual_operation:
                     fcents_mhz = np.array([float(fcent) for fcent in self.fcents],dtype=float)
@@ -377,7 +386,7 @@ class CalibrationGainCollector():
                 """,severity="DEBUG")
 
                 phase_file_path_ac, phase_file_path_bd = plot_gain_phase(full_gains_map, full_observation_channel_frequencies_hz, fit_method = self.fit_method,
-                                                                        outdir = os.path.join(self.output_dir ,"calibration_plots"), outfilestem=obs_id,
+                                                                        outdir = os.path.join(output_dir, "calibration_plots"), outfilestem=obs_id,
                                                                         source_name = self.source)
 
                 self.log_and_post_slackmessage(f"""
@@ -428,7 +437,7 @@ class CalibrationGainCollector():
                 t_delay_dict = self.dictnpy_to_dictlist(delay_residual_map)
 
                 #log directory for calibration delay residuals
-                delay_residual_path = os.path.join(self.output_dir, "delay_residuals")
+                delay_residual_path = os.path.join(output_dir, "delay_residuals")
                 if not os.path.exists(delay_residual_path):
                     os.makedirs(delay_residual_path)
 
@@ -480,7 +489,7 @@ class CalibrationGainCollector():
                     updated_fixed_delays[tune] = sub_updated_fixed_delays
 
                 #bit of logic here to remove the previous filestem from the name.
-                fixed_delay_file_loc = os.path.join((self.output_dir), ("fixed_delays/"))
+                fixed_delay_file_loc = os.path.join((output_dir), ("fixed_delays/"))
                 if not os.path.exists(fixed_delay_file_loc):
                     os.makedirs(fixed_delay_file_loc)
                 if '%' in fixed_delay_filepath:
@@ -507,7 +516,7 @@ class CalibrationGainCollector():
                 #-------------------------LOAD THE NEW FIXED PHASES-------------------------#
 
                 #bit of logic here to remove the previous filestem from the name.
-                fixed_phase_file_loc = os.path.join((self.output_dir), ("fixed_phases/"))
+                fixed_phase_file_loc = os.path.join((output_dir), ("fixed_phases/"))
                 if not os.path.exists(fixed_phase_file_loc):
                     os.makedirs(fixed_phase_file_loc)
                 if '%' in fixed_phase_filepath:
@@ -532,7 +541,7 @@ class CalibrationGainCollector():
                     
                 #-------------------------PLOT GENERATION AND SAVING-------------------------#
                 delay_file_path, phase_file_path_ac, phase_file_path_bd = plot_delay_phase(delay_residual_map, phase_cal_map, 
-                        full_observation_channel_frequencies_hz, outdir = os.path.join(self.output_dir ,"calibration_plots"), outfilestem=obs_id,
+                        full_observation_channel_frequencies_hz, outdir = os.path.join(output_dir ,"calibration_plots"), outfilestem=obs_id,
                         source_name = self.source)
 
                 self.log_and_post_slackmessage(f"""
@@ -577,7 +586,8 @@ class CalibrationGainCollector():
                         Dry run = `{self.dry_run}`,
                         hash timeout = `{self.hash_timeout}s`, re-arm time = `{self.re_arm_time}s`,
                         fitting method = `{self.fit_method}`,
-                        results directory = `{self.output_dir}`
+                        source = `{self.source}`, 
+                        results directory = `{output_dir}`
                     """, severity="INFO", is_reply=False, update_message=True)
                     self.log_and_post_slackmessage(f"""
                         Clearing redis hash: {GPU_GAINS_REDIS_HASH} contents in anticipation of next calibration run.
@@ -603,7 +613,7 @@ if __name__ == "__main__":
     from GPU nodes and performing necessary actions, the service will sleep for this duration until re-arming""")
     parser.add_argument("--fit-method", type=str, default="linear", required=False, help="""Pick the complex fitting method
     to use for residual calculation. Options are: ["linear", "fourier"]""")
-    parser.add_argument("-o", "--output-dir", type=str, default="/home/cosmic/logs/calibration", required=False, help="""The output directory in 
+    parser.add_argument("-o", "--output-dir", type=str, default="/mnt/cosmic-storage-1/data1", required=False, help="""The output directory in 
     which to place all log folders/files during operation.""")
     parser.add_argument("-f","--fixed-delay-to-update", type=str, required=False, help="""
     csv file path to latest fixed delays that must be modified by the residual delays calculated in this script. If not provided,
@@ -647,7 +657,7 @@ if __name__ == "__main__":
             redis_publish_dict_to_hash(redis_obj, CALIBRATION_CACHE_HASH,{"fixed_phase":input_fixed_phases})
             input_fixed_phases = None
 
-    calibrationGainCollector = CalibrationGainCollector(redis_obj, output_dir = args.output_dir, hash_timeout = args.hash_timeout, dry_run = args.dry_run,
+    calibrationGainCollector = CalibrationGainCollector(redis_obj, user_output_dir = args.output_dir, hash_timeout = args.hash_timeout, dry_run = args.dry_run,
                                 re_arm_time = args.re_arm_time, fit_method = args.fit_method, slackbot = slackbot, input_fixed_delays = input_fixed_delays,
                                 input_fixed_phases = input_fixed_phases, input_json_dict = None if not bool(input_json_dict) else input_json_dict,
                                 input_fcents = args.fcentmhz, input_tbin = args.tbin)
