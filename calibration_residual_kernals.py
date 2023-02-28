@@ -1,6 +1,6 @@
 import numpy as np
 
-def calc_residuals_from_polyfit(ant_to_gains, observation_frequencies, current_phase_cals, frequency_indices):
+def calc_residuals_from_polyfit(ant_to_gains, observation_frequencies, current_phase_cals, frequency_indices, delay_residual_rejection=100):
         """
         Accept mapping of antenna to gains along with the observation frequencies of dimension (n_tunings, n_chans). In the event 
         not all gains are received, a start and stop demarcate the region over which to calculate the fit.
@@ -14,6 +14,8 @@ def calc_residuals_from_polyfit(ant_to_gains, observation_frequencies, current_p
                     {<ant> : [[phase_cal_pol0_tune0], [phase_cal_pol1_tune0], [phase_cal_pol0_tune1], [phase_cal_pol1_tune1]], ...}
             frequency_indices : indices of the collected gains (sorted) in the full n_chans per tuning: 
                             {tuning_idx : np.array(int)}
+            delay_residual_rejection float: The absolute delay residual threshold in nanoseconds above which the process will reject applying the calculated delay
+                                and phase residual calibration values
 
         Return:
             delay_residual_map : A mapping of antenna to delay residual values in nanoseconds of dimension (n_streams)
@@ -25,41 +27,50 @@ def calc_residuals_from_polyfit(ant_to_gains, observation_frequencies, current_p
         delay_residual_map = {}
         phase_cal_map = {} 
 
-        for ant, gain_matrix in ant_to_gains.items():
-            gain_matrix = np.array(gain_matrix, dtype = np.complex64)
+        for ant, phase_matrix in current_phase_cals.items():
+            phase_matrix = np.array(phase_matrix,dtype=float)
+            if ant in ant_to_gains.keys():
 
-            #Subtract the last applied phases from the gain (incase incorrect)
-            current_phase_matrix = np.exp(1j * np.array(current_phase_cals[ant]))
-            new_gain_matrix = gain_matrix * current_phase_matrix
+                gain_matrix = np.array(ant_to_gains[ant], dtype = np.complex64)
+                #Subtract the last applied phases from the gain (incase incorrect)
+                current_phase_matrix = np.exp(1j * np.array(phase_matrix))
+                new_gain_matrix = gain_matrix * current_phase_matrix
 
-            nof_streams = int(gain_matrix.shape[0])
-            nof_tunings = int(observation_frequencies.shape[0])
-            nof_pols = int(nof_streams/nof_tunings)
-            residual_delays = np.zeros(nof_streams,dtype=np.float64)
-            phase_cals = np.zeros(gain_matrix.shape,dtype=np.float64)
+                nof_streams = int(gain_matrix.shape[0])
+                nof_tunings = int(observation_frequencies.shape[0])
+                nof_pols = int(nof_streams/nof_tunings)
+                residual_delays = np.zeros(nof_streams,dtype=np.float64)
+                phase_cals = np.zeros(gain_matrix.shape,dtype=np.float64)
 
-            for tune in range(nof_tunings):
-                if frequency_indices[tune].size==0:
-                    #This means that nothing was collected for that tuning
-                    continue
-                else:
-                    freq_range = observation_frequencies[tune, frequency_indices[tune]]
-                    phases = np.angle(new_gain_matrix[:,frequency_indices[tune]])
-                    for pol in range(nof_pols):  #probably unecessary - could do with some matrix mult stuff
-                        #some binary logic
-                        stream_idx = int(str(tune)+str(pol),2)
-                        unwrapped_phases = np.unwrap(phases[stream_idx,:])
-                        phase_slope = np.polyfit(freq_range, unwrapped_phases,1)[0]
-                        residuals = unwrapped_phases - (phase_slope*freq_range)
-                        residual_delays[stream_idx] = (phase_slope / (2*np.pi)) * 1e9
-                        phase_cals[stream_idx,frequency_indices[tune]] = residuals % (2*np.pi)
-            
-            delay_residual_map[ant] = residual_delays
-            phase_cal_map[ant] = phase_cals
+                for tune in range(nof_tunings):
+                    if frequency_indices[tune].size==0:
+                        #This means that nothing was collected for that tuning
+                        continue
+                    else:
+                        freq_range = observation_frequencies[tune, frequency_indices[tune]]
+                        phases = np.angle(new_gain_matrix[:,frequency_indices[tune]])
+                        for pol in range(nof_pols):  #probably unecessary - could do with some matrix mult stuff
+                            #some binary logic
+                            stream_idx = int(str(tune)+str(pol),2)
+                            unwrapped_phases = np.unwrap(phases[stream_idx,:])
+                            phase_slope = np.polyfit(freq_range, unwrapped_phases,1)[0]
+                            residuals = unwrapped_phases - (phase_slope*freq_range)
+                            residual_delay = (phase_slope / (2*np.pi)) * 1e9
+                            if np.abs(residual_delay) > delay_residual_rejection:
+                                residual_delays[stream_idx] = 0.0
+                                phase_cals[stream_idx] = phase_matrix[stream_idx]
+                            residual_delays[stream_idx] = (phase_slope / (2*np.pi)) * 1e9
+                            phase_cals[stream_idx,frequency_indices[tune]] = residuals % (2*np.pi)
+                
+                delay_residual_map[ant] = residual_delays
+                phase_cal_map[ant] = phase_cals
+            else:
+                phase_cal_map[ant] = phase_matrix
+                delay_residual_map[ant] = np.zeros(nof_streams,dtype=np.float64)
 
         return delay_residual_map, phase_cal_map
 
-def calc_residuals_from_ifft(ant_to_gains, observation_frequencies, current_phase_cals, frequency_indices):
+def calc_residuals_from_ifft(ant_to_gains, observation_frequencies, current_phase_cals, frequency_indices, delay_residual_rejection=100):
     """
     Accept mapping of antenna to gains.
     Returns ant to residual delay and ant to phase cal maps.
@@ -72,6 +83,8 @@ def calc_residuals_from_ifft(ant_to_gains, observation_frequencies, current_phas
                     {<ant> : [[phase_cal_pol0_tune0], [phase_cal_pol1_tune0], [phase_cal_pol0_tune1], [phase_cal_pol1_tune1]], ...}
         frequency_indices : indices of the collected gains (sorted) in the full n_chans per tuning: 
                             {tuning_idx : np.array(int)}
+        delay_residual_rejection float: The absolute delay residual threshold in nanoseconds above which the process will reject applying the calculated delay
+                                and phase residual calibration values
 
     Return:
         delay_residual_map : A mapping of antenna to delay residual values in nanoseconds of dimension (n_streams)
@@ -109,15 +122,22 @@ def calc_residuals_from_ifft(ant_to_gains, observation_frequencies, current_phas
                 for pol in range(nof_pols):   #probably unecessary - could do with some matrix mult stuff
                     #some binary logic
                     stream_idx = int(str(tune)+str(pol),2)
-                    residual_delays[stream_idx] = -1.0 * tlags[max_idxs[stream_idx]]
-                    gain_from_residual_delay = np.exp(2j*np.pi*(observation_frequencies[tune,:]*1e-9)*residual_delays[stream_idx])
-                    phase_cals[stream_idx] = np.angle(new_gain_matrix[stream_idx,:]/gain_from_residual_delay)
-                    #zero all phases outside the collected gains range
-                    phase_cals[stream_idx, uncollected_gain_range] = 0.0
+                    residual_delay = -1.0 * tlags[max_idxs[stream_idx]]
+                    if np.abs(residual_delay) > delay_residual_rejection:
+                        residual_delays[stream_idx] = 0.0
+                        phase_cals[stream_idx] = phase_matrix[stream_idx]
+                    else:
+                        residual_delays[stream_idx] = residual_delay
+                        gain_from_residual_delay = np.exp(2j*np.pi*(observation_frequencies[tune,:]*1e-9)*residual_delays[stream_idx])
+                        phase_cals[stream_idx] = np.angle(new_gain_matrix[stream_idx,:]/gain_from_residual_delay)
+                        #zero all phases outside the collected gains range
+                        phase_cals[stream_idx, uncollected_gain_range] = 0.0
+
             delay_residual_map[ant] = residual_delays
             phase_cal_map[ant] = phase_cals
             
         else:
             phase_cal_map[ant] = phase_matrix
+            delay_residual_map[ant] = np.zeros(nof_streams,dtype=np.float64)
 
     return delay_residual_map, phase_cal_map
