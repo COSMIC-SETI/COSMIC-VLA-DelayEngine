@@ -12,7 +12,6 @@ from delay_engine.phasing import compute_uvw
 import astropy.constants as const
 from astropy.coordinates import SkyCoord
 from astropy.time import Time
-from cosmic.fengines import delays, configure
 from cosmic.redis_actions import redis_obj, redis_hget_keyvalues, redis_publish_service_pulse, redis_publish_dict_to_hash, redis_publish_dict_to_channel
 
 LOGFILENAME = "/home/cosmic/logs/DelayModel.log"
@@ -21,13 +20,13 @@ SERVICE_NAME = os.path.splitext(os.path.basename(__file__))[0]
 
 #LOGGER:
 logger = logging.getLogger('model_delays')
-logger.setLevel(logging.INFO)
+logger.setLevel(logging.DEBUG)
 
 # create console handler and set level to debug
 ch = logging.StreamHandler()
-ch.setLevel(logging.INFO)
+ch.setLevel(logging.DEBUG)
 fh = RotatingFileHandler(LOGFILENAME, mode = 'a', maxBytes = 512, backupCount = 0, encoding = None, delay = False)
-fh.setLevel(logging.INFO)
+fh.setLevel(logging.DEBUG)
 
 # create formatter
 formatter = logging.Formatter("[%(asctime)s - %(levelname)s - %(filename)s:%(lineno)s] %(message)s")
@@ -84,7 +83,6 @@ class DelayModel(threading.Thread):
 
         #initialise the ant to fshift dictionary
         self.antname_fshift_lock = threading.Lock()
-        self._fetch_antname_lo_fshift_dict()
 
         #set up delay_data dictionary
         self.delay_data = {
@@ -148,19 +146,6 @@ class DelayModel(threading.Thread):
             logger.info("Collected antenna position values. Publishing now...")
             redis_publish_dict_to_hash(self.redis_obj, "META_antennaITRF",  self.itrf.to_dict('index'))
     
-    def _fetch_antname_lo_fshift_dict(self):
-        """
-        Fetch and translate into a dictionary of {antname: {lo: fshift_value}}
-        the redis hash "META_VCI_DELAY"
-        """
-        with self.antname_fshift_lock:
-            self.antname_lo_fshift_dict = delays.get_antToFshiftMap(
-                self.redis_obj,
-                ["A", "B", "C", "D"],
-                delays.get_sideband(self.redis_obj),
-                self.antnames,
-            )
-    
     def _calc_source_coords_and_lo_eff_from_obs_meta(self, obs_meta):
         """
         Accept a meta obs dictionary and calculate source
@@ -196,8 +181,7 @@ class DelayModel(threading.Thread):
         pubsub = self.redis_obj.pubsub(ignore_subscribe_messages=True)
         for channel in [
             "meta_antennaproperties",
-            "obs_phase_center",
-            "vci_update"
+            "obs_phase_center"
         ]:
             try:
                 pubsub.subscribe(channel) 
@@ -214,10 +198,6 @@ class DelayModel(threading.Thread):
                     self._calc_source_coords_and_lo_eff_from_obs_meta(obsmeta)
                     #Tell other processes that a new pointing has arrived
                     self.source_point_update.set()
-                if message['channel'] == "vci_update":
-                    data = json.loads(message.get('data'))
-                    if data:
-                        self._fetch_antname_lo_fshift_dict()
     
     def calculate_delay(self, publish : bool = True):
         """
@@ -341,8 +321,6 @@ class DelayModel(threading.Thread):
         delay_dict = df.to_dict('index')
         for ant, delays in delay_dict.items():
             #add in the lo values for 2nd compensation phase tracking
-            with self.antname_fshift_lock:
-                delays["lo_hz"] = configure.order_lo_dict_values(self.antname_lo_fshift_dict[ant])
             delay_dict[ant] = delays
             redis_publish_dict_to_channel(self.redis_obj, f"{ant}_delays", delays)
         self.last_sent_timestamp = time.time()
