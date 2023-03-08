@@ -206,7 +206,11 @@ class CalibrationGainCollector():
             ant_tune_to_collected_gain[ant+f"_{tuning_idx}"] = [[],[]]
 
         for start_freq_tune, payload in calibration_gains.items():
-            tune_idx, start_freq = self.get_tuningidx_and_start_freq(start_freq_tune)
+            try:
+                tune_idx, start_freq = self.get_tuningidx_and_start_freq(start_freq_tune)
+            except ValueError:
+                self.log_and_post_slackmessage(f"UVH5 recorded baseband values not in {self.basebands}. Ignoring trigger.", severity="ERROR")
+                raise ValueError
             self.log_and_post_slackmessage(f"Processing tuning {tune_idx}, start freq {start_freq}...", severity="DEBUG")
             obs_id_t = payload['obs_id']
             if obs_id is not None and obs_id_t != obs_id:
@@ -347,7 +351,11 @@ class CalibrationGainCollector():
                     ]
 
                 #Start function that waits for hash_timeout before collecting redis hash.
-                ant_tune_to_collected_gains, collected_frequencies, self.ants, obs_id = self.collect_phases_for_hash_timeout(self.hash_timeout, manual_operation = manual_operation) 
+                try:
+                    ant_tune_to_collected_gains, collected_frequencies, self.ants, obs_id = self.collect_phases_for_hash_timeout(self.hash_timeout, manual_operation = manual_operation) 
+                except:
+                    self.log_and_post_slackmessage(f"The collection of calibration from GPU gains failed. Aborting current trigger.", severity="ERROR")
+                    continue
                 
                 #Update output_dir to contain projid, dataset_id and obs_id
                 output_dir = self.user_output_dir if manual_operation else os.path.join(self.user_output_dir, self.projid, self.dataset, obs_id, "calibration")
@@ -618,7 +626,7 @@ if __name__ == "__main__":
     from GPU nodes and performing necessary actions, the service will sleep for this duration until re-arming""")
     parser.add_argument("--fit-method", type=str, default="linear", required=False, help="""Pick the complex fitting method
     to use for residual calculation. Options are: ["linear", "fourier"]""")
-    parser.add_argument("-o", "--output-dir", type=str, default="/mnt/cosmic-storage-1/data1", required=False, help="""The output directory in 
+    parser.add_argument("-o", "--output-dir", type=str, default="/mnt/cosmic-storage-1/data2", required=False, help="""The output directory in 
     which to place all log folders/files during operation.""")
     parser.add_argument("-f","--fixed-delay-to-update", type=str, required=False, help="""
     csv file path to latest fixed delays that must be modified by the residual delays calculated in this script. If not provided,
