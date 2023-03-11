@@ -5,6 +5,8 @@ import time
 import numpy as np
 import logging
 from logging.handlers import RotatingFileHandler
+from influxdb_client import InfluxDBClient
+from influxdb_client.client.write_api import SYNCHRONOUS
 import os
 import argparse
 
@@ -99,9 +101,48 @@ class DelayLogger:
     def __init__(self, redis_obj, polling_rate):
         self.redis_obj = redis_obj
         self.polling_rate = polling_rate
+        bucket = "seti"
+        token = "QHp40drt_QBbDCXtiyV81OPxmCPSftTG4vgBkGpM542OT2yfyJoikaLeKIdmD7rx0NFfpTlLODPDbupCV5bfKQ=="
+        self.client = InfluxDBClient(url='http://localhost:8001', token=token, org='cosmic_vla')
         self.ant_feng_map = ant_remotefeng_map.get_antennaFengineDict(redis_obj)
-
         logger.info("Starting Delay logger...\n")
+
+    def send_delaydata_to_influx_db(self,delay_status_dict):
+        influx_db_json = []
+        for ant, state in delay_status_dict.items():
+            influx_delay_dict = {}
+            influx_delay_dict["measurement"] = ant
+            if isinstance(state,dict):
+                influx_delay_dict["time"] = int(state["delays_loaded_at"]*1e9)
+                influx_delay_dict["tags"] = {
+                    "tracking_ok" : state["ok"],
+                    "tracking_on" : state["on"],
+                    "loadtime_accurate" : state["loadtime_accurate"],
+                    "delay_correct": str(all(state["delay_correct"])),
+                    "phase_correct": str(all(state["phase_correct"])),
+                    "phase_cal_correct": str(all(state["phase_cal_correct"]))
+                }
+                influx_delay_dict["fields"] = {
+                    "delay_0_ns" : state["firmware_delay_ns"][0],
+                    "delay_1_ns" : state["firmware_delay_ns"][1],
+                    "delay_2_ns" : state["firmware_delay_ns"][2],
+                    "delay_3_ns" : state["firmware_delay_ns"][3],
+                    "phase_0_ns" : state["firmware_phase_rad"][0],
+                    "phase_1_ns" : state["firmware_phase_rad"][1],
+                    "phase_2_ns" : state["firmware_phase_rad"][2],
+                    "phase_3_ns" : state["firmware_phase_rad"][3],
+                    "fshift_0_hz" : state["loaded_fshift_hz"][0],
+                    "fshift_1_hz" : state["loaded_fshift_hz"][1],
+                    "fshift_2_hz" : state["loaded_fshift_hz"][2],
+                    "fshift_3_hz" : state["loaded_fshift_hz"][3],
+                }
+            else:
+                continue
+            influx_db_json+=[influx_delay_dict]
+            
+        
+            write_api = self.client.write_api(write_options=SYNCHRONOUS)    
+            write_api.write(bucket='seti', record=influx_db_json, write_precision='ns')
     
     def run(self):
         """
@@ -117,10 +158,9 @@ class DelayLogger:
                 redis_publish_service_pulse(self.redis_obj, SERVICE_NAME)
                 t = time.time()
                 ant_delay_status_dict, bad_ant_list = fetch_delay_status_dict(self.redis_obj, self.ant_feng_map)
-                duration = time.time() - t
-                print(f"Duration = {duration}s")
-                logger.info(f"Delay state: {ant_delay_status_dict}")
                 redis_publish_dict_to_hash(self.redis_obj, "FENG_delayState", ant_delay_status_dict)
+                self.send_delaydata_to_influx_db(ant_delay_status_dict)
+                duration = time.time() - t
                 time.sleep(self.polling_rate - duration if duration < self.polling_rate else 0.0)
                 i+=1
 
