@@ -1,13 +1,38 @@
 # COSMIC-VLA-DelayEngine
-Set of scripts for the generation of geometric model delay values and calibration delay values for
-delay tracking during Cosmic observations. This repository submodules the delay engine from the ATA for
-use of some of its functions.
+This repository contains all the scripts used for delay calculation, monitoring and control. All communication with the F-Engines and GPU-node services is done via [remoteobjects](https://github.com/MydonSolutions/remoteobjects-py) and Redis.
 
-`gen_antenna_itrf.py` : Pulls local antenna coordinates from MCAST and publishes ITRF values to redis hash: META_antennaITRF. It further
-                        generates a `vla_antenna_itrf.csv` file to hold these values.
+The entirety of the delay tracking and calibration process is viewed as follows (only Cosmic Headnode processes are contained within this repository):
 
-`delaymodel.py`       : Inheriting from the `evla_mcast.Controller`, this process initialises off the output of `gen_antenna_itrf.py` 
-                        and listens for updates of *right ascension* and *declination* values from mcast. Every period, geometric delay
-                        values are calculated and published to META_modelDelays hash.
-                        The model delays are calculated relative to the array center and the delays are advanced by the delay anticipated 
-                        from the largest possible VLA baseline (8km).
+![Delay Management System](https://user-images.githubusercontent.com/28049678/224703031-b299c177-adc0-4045-8214-1863d2c255f4.jpg)
+
+Pale blue blocks are Head node processes, light rust-red blocks are FPGA node processes and light pink blocks are GPU node processes. While this Readme will touch on the delay-specific processes from the GPU and FPGA nodes used in Delay management, a full explanation of their operation is found at their respective repositories: [vla-dev](https://github.com/realtimeradio/vla-dev) and [COSMIC-VLA-CalibrationEngine](https://github.com/COSMIC-SETI/COSMIC-VLA-CalibrationEngine).
+
+The above image may be separated into two main processes. Delay coefficient and delay/phase calibration calculation.
+
+### The Delay Model:
+`delaymodel.py` which runs as a service on the headnode (delaymode.service) is responsible for calculating the Geometric delay coefficients needed for delay tracking. It listens on two redis channels: `meta_antennaproperties` and `obs_phase_center` for updates on antenna positions and updates on source pointings respectively.
+
+The module makes use of the submoduled repository from the ATA's geometric delay module [delayengine](https://github.com/wfarah/delay_engine), to calculate delay coefficients.
+
+![Geometric delay tracking](https://user-images.githubusercontent.com/28049678/224711832-590c9a4c-c651-4b8f-ab5b-05e72c4eeb2a.jpg)
+
+Along with the reception of source pointing updates on `obs_phase_center` is an optional `loadtime` in micro-seconds. This interface is available to enable exact source-phasing in time. Loadtime can be left as `None`. In the light purple block above, the decision structure for the `delaymodel` is shown. If a new pointing is received or it has been longer than 5s since the last set of delay coefficients were sent out, the received/last recieved `loadtime` is evaluated and delay ceofficients are generated for the appropriate phase centre while `fpga_loadtime` is updated.
+
+Interpolation within the delay model is done over 3s and delay coefficients are generated to 3rd order. These coefficients are in nanoseconds where the geometric delay at time `t_i` may be calculated as:
+
+`Delay(t_i) = delay_ns + (delay_rate_nsps * t_i) + (0.5 * delay_raterate_nsps2 * ti^2)`
+
+Additional values for phase correction are provided by the `delaymodel`, namely `effective_lo` and `sideband` which are VLA tuning specific values provided for the phase compensation of the frequency downsampling upstream in the VLA digitiser.
+
+The delay coefficients for each antenna are sent out by the `delaymodel` as a dictionary on redis channels with name `<antname>_delays` where <antname> is the name of the antenna for which those geometric delays apply.
+
+The light red block shows the interpolation and loading process performed on the FPGA nodes by an antenna-specific `CosmicFengine` instance. Each instance listens on `<antname>_delays`, `update_calibration_delays` and `update_calibration_phases` channels. `<antname>_delays` is how the delay tracking thread receives its geometric delay coefficients, loadtime instructions and phase correction factors, whereas the two `update*` channels are channels used by the delay calibration process to alert the delay tracking thread of updates to phase and delay calibration value updates.
+
+All model delay values are then also loaded to redis hash `META_modelDelays` for logging and monitoring purposes.
+
+If delay coefficients are received with a `loadtime` 1-2s into the future, delay coefficients are updated to those received, delay values are calculated for the `loadtime` provided and set to load to the F-Engine at that `loadtime`. If not, the old delay coefficients are retained and delay values are calculated for `0.5s` into the future and set to load then.
+
+After loading, values are checked and sent to the redis hash `FENG_delayStatus` for logging and monitoring purposes.
+
+### The Delay Calibration Model:
+`calibration_gain_collator.py` which runs as a service on the headnode (calibration_gain_collator.service) is responsible for collecting the gain values for each frequency across that spans all GPU nodes.
