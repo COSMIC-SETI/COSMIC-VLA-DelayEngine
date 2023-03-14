@@ -175,7 +175,7 @@ class DelayModel(threading.Thread):
 
     def redis_chan_listener(self):
         """This function listens for updates on the  "meta_antennaproperties"
-        and "meta_obs" redis channels.
+        and "obs_phase_center" redis channels.
         Messages are listened for continuously but their contents is checked in
         calculate delay at a polling rate."""
         pubsub = self.redis_obj.pubsub(ignore_subscribe_messages=True)
