@@ -32,7 +32,26 @@ All model delay values are then also loaded to redis hash `META_modelDelays` for
 
 If delay coefficients are received with a `loadtime` 1-2s into the future, delay coefficients are updated to those received, delay values are calculated for the `loadtime` provided and set to load to the F-Engine at that `loadtime`. If not, the old delay coefficients are retained and delay values are calculated for `0.5s` into the future and set to load then.
 
+
 After loading, values are checked and sent to the redis hash `FENG_delayStatus` for logging and monitoring purposes.
 
 ### The Delay Calibration Model:
-`calibration_gain_collator.py` which runs as a service on the headnode (calibration_gain_collator.service) is responsible for collecting the gain values for each frequency across that spans all GPU nodes.
+`calibration_gain_collator.py` which runs as a service on the headnode (calibration_gain_collator.service) is responsible for collecting the gain values for each frequency that span all GPU nodes. This design is depicted below:
+
+![DelayCalibrationProcess](https://user-images.githubusercontent.com/28049678/225007506-85b9f608-2d98-4e48-9a1d-6a15422e90f5.jpg)
+
+The image is divided into two halves. Blue half and white half. The white half contains processes from outside this repository running on the GPU and Head nodes - namely [calibrate_uvh5.py](https://github.com/COSMIC-SETI/COSMIC-VLA-CalibrationEngine/blob/main/calibrate_uvh5.py) and [postprocess_hub.py](https://github.com/COSMIC-SETI/COSMIC-VLA-PythonLibs/blob/main/scripts/postprocess_hub.py).
+
+The blue half is entirely the `calibration_gain_collator.py` process.
+
+When a calibration recording is about to begin, a message with field "postprocess" set to "calibrate-uvh5" is sent out on Redis channel "observations" is sent to indicate so. Contained in the message are also the `project_id` and `dataset_id` for the observation. This message which serves as a trigger, moves the `calibration_gain_collator` to retrieve from the Redis hash `META`, the `fcent`, `tbin` and `source` fields. 
+
+After the calibration recording is complete, the postprocessor will launch `calibrate_uvh5.py` and direct it to extract gains from the recently recorded *.uvh5 files. This happens in parallel across all GPU instances. Each *.uvh5 file contains a subset of frequencies and an individual tuning (2 polarisations). As gains cannot be calculated for all frequency channels/streams off of a subset, all gains must be collated and ordered.
+
+This introduces the need for the Headnode service `calibration_gain_collator.py`. All `calibrate_uvh5.py` processes publish their gains results to `GPU_calibrationGains` under the unique key: <startingfrequency>,<tuning_id>. With each publication, the `calibrate_uvh5.py` process will send out a boolean trigger on `gpu_calibrationgains` to indicate a publication has been made. On the first trigger from this channel, the `calibration_gain_collator.py` will start a timer (user defined). Once that timer expires, all gains will be collected from `GPU_calibrationGains`.
+
+Then using the information collected from the "META" hash and "observations" channel message, the `calibration_gain_collator.py` will start placing gains in their correct place amongst 1024 channels centered on fcents.
+
+After this sorting, the gains per antenna, per stream, per frequency are sent to one of the calibration fitting kernals inside `calibration_residual_kernals.py`. What is returned from these kernels is a set of residual delays and calibration phases. The residual delays are subtracted from the previous calibration delays and then loaded to the F-Engines along with the calibration phases. 
+
+The `calibration_gain_collator.py` process updates "CAL_fixedValuePaths" hash to reflect that those files contain the present fixed values on the F-Engines and then goes back to an armed state. 
