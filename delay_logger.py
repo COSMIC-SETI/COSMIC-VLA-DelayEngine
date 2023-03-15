@@ -101,9 +101,9 @@ class DelayLogger:
     def __init__(self, redis_obj, polling_rate):
         self.redis_obj = redis_obj
         self.polling_rate = polling_rate
-        bucket = "seti"
-        token = "QHp40drt_QBbDCXtiyV81OPxmCPSftTG4vgBkGpM542OT2yfyJoikaLeKIdmD7rx0NFfpTlLODPDbupCV5bfKQ=="
-        self.client = InfluxDBClient(url='http://localhost:8001', token=token, org='cosmic_vla')
+        bucket = "testing"
+        token = "uW0zkq-R5E0LUTHfeKPT0hFPNalsBQWHJXzDhtKAI4sCvtIZ8jXVVZ4cKGMkf7BmAgHfcr55Yzjg7sIZ4chySg=="
+        self.client = InfluxDBClient(url='http://localhost:8086', token=token, org='seti')
         self.ant_feng_map = ant_remotefeng_map.get_antennaFengineDict(redis_obj)
         logger.info("Starting Delay logger...\n")
 
@@ -142,7 +142,7 @@ class DelayLogger:
             
         
             write_api = self.client.write_api(write_options=SYNCHRONOUS)    
-            write_api.write(bucket='seti', record=influx_db_json, write_precision='ns')
+            write_api.write(bucket='testing', org="seti", record=influx_db_json, write_precision='ns')
     
     def run(self):
         """
@@ -169,7 +169,7 @@ if __name__ == "__main__":
     description=("Set up the Delay logger.")
     )
     parser.add_argument(
-    "-p","--polling_rate", type=int, help="Rate at which delays are checked.", default=30
+    "-p","--polling_rate", type=int, help="Rate at which delays are checked.", default=10
     )
     parser.add_argument(
     "-c", "--clean", action="store_true",help="Delete the existing log file and start afresh.",
