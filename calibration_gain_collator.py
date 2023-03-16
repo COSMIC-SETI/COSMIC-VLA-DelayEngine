@@ -40,6 +40,8 @@ fh.setFormatter(formatter)
 logger.addHandler(ch)
 logger.addHandler(fh)
 
+CONFIG_HASH = "CAL_configuration"
+
 GPU_PHASES_REDIS_HASH = "GPU_calibrationPhases"
 GPU_GAINS_REDIS_HASH = "GPU_calibrationGains"
 GPU_PHASES_REDIS_CHANNEL = "gpu_calibrationphases"
@@ -48,7 +50,7 @@ GPU_GAINS_REDIS_CHANNEL = "gpu_calibrationgains"
 CALIBRATION_CACHE_HASH = "CAL_fixedValuePaths"
 
 class CalibrationGainCollector():
-    def __init__(self, redis_obj, user_output_dir, hash_timeout=20, re_arm_time = 30, fit_method = "linear", dry_run = False,
+    def __init__(self, redis_obj, fetch_config = False, user_output_dir=None, hash_timeout=20, re_arm_time = 30, fit_method = "linear", dry_run = False,
     nof_streams = 4, nof_tunings = 2, nof_pols = 2, nof_channels = 1024, slackbot=None, input_fixed_delays = None, input_fixed_phases = None,
     input_json_dict = None, input_fcents = None, input_tbin = None, delay_residual_rejection_threshold = 100):
         self.redis_obj = redis_obj
@@ -70,7 +72,12 @@ class CalibrationGainCollector():
         self.nof_tunings = nof_tunings
         self.nof_pols = nof_pols
         self.projid = None
-        self.dataset = None    
+        self.dataset = None   
+
+        if fetch_config:
+            #This will override the above properties IF the redis configuration hash is populated and exists
+            self.configure_from_hash() 
+
         redis_clear_hash_contents(self.redis_obj, GPU_GAINS_REDIS_HASH)
         self.meta_obs = redis_hget_keyvalues(self.redis_obj, "META")
         self.ant_feng_map = ant_remotefeng_map.get_antennaFengineDict(self.redis_obj)
@@ -90,6 +97,27 @@ class CalibrationGainCollector():
             with open(fixed_value_filepaths["fixed_phase"], 'r') as f:
                 self.update_antenna_phascals(json.load(f))
     
+    def configure_from_hash(self):
+        """This function will gather from the redis configuration hash, the required configuration in which
+        to run the calibration process."""
+        try:
+            config = redis_hget_keyvalues(self.redis_obj,CONFIG_HASH)
+        except:
+            self.log_and_post_slackmessage(f"""
+            Calibration process has been requested to run as a service,
+            but the configuration redis hash {CONFIG_HASH},
+            either does not exist or is inaccessible.
+            Using default configuration.""")
+            return
+        
+        self.user_output_dir = config.get("output_dir", self.user_output_dir)
+        self.hash_timeout = config.get("hash_timeout", self.hash_timeout)
+        self.re_arm_time = config.get("re_arm_time", self.re_arm_time)
+        self.fit_method = config.get("fit_method", self.fit_method)
+        self.input_fixed_delays = config.get("input_fixed_delays", self.input_fixed_delays)
+        self.input_fixed_phases = config.get("input_fixed_phases", self.input_fixed_phases)
+        self.delay_residual_rejection_threshold = config.get("delay_residual_rejection_threshold", self.delay_residual_rejection_threshold)
+
     def get_tuningidx_and_start_freq(self, message_key):
         key_split = message_key.split(',')
         tuning = key_split[-1]
@@ -618,6 +646,9 @@ if __name__ == "__main__":
     description=("""Listen for updates to GPU hashes containing calibration phases
     and generate residual delays and load calibration phases to the F-Engines.""")
     )
+    parser.add_argument("-s","--run-as-service", action="store_true",help="""If specified, all other arguments are ignored
+    and the configuration set up is collected on each main loop from the configuration redis Hash. See 
+    configure_calibration_process.py to set the hash contents for configuration.""")
     parser.add_argument("--hash-timeout", type=float,default=10, required=False, help="""How long to wait for calibration 
     postprocessing to complete and update phases.""")
     parser.add_argument("--dry-run", action="store_true", help="""If run as a dry run, delay residuals and phases are 
@@ -673,7 +704,7 @@ if __name__ == "__main__":
             redis_publish_dict_to_hash(redis_obj, CALIBRATION_CACHE_HASH,{"fixed_phase":input_fixed_phases})
             input_fixed_phases = None
 
-    calibrationGainCollector = CalibrationGainCollector(redis_obj, user_output_dir = args.output_dir, hash_timeout = args.hash_timeout, dry_run = args.dry_run,
+    calibrationGainCollector = CalibrationGainCollector(redis_obj, fetch_config = args.run_as_service, user_output_dir = args.output_dir, hash_timeout = args.hash_timeout, dry_run = args.dry_run,
                                 re_arm_time = args.re_arm_time, fit_method = args.fit_method, slackbot = slackbot, input_fixed_delays = input_fixed_delays,
                                 input_fixed_phases = input_fixed_phases, input_json_dict = None if not bool(input_json_dict) else input_json_dict,
                                 input_fcents = args.fcentmhz, input_tbin = args.tbin, delay_residual_rejection_threshold = args.delay_residual_rejection_threshold)
