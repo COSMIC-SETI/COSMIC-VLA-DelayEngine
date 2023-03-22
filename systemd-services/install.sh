@@ -5,11 +5,11 @@ then
   echo "Please run with super-user privileges"
   exit 1
 else
-	cp ./delaycalibration.service /etc/systemd/system/
+	cp ./calibration_gain_collator.service /etc/systemd/system/
 	cp ./delaymodel.service /etc/systemd/system/
-	systemctl disable delaycalibration.service
+	systemctl disable calibration_gain_collator.service
 	systemctl disable delaymodel.service
 	systemctl daemon-reload
-	systemctl enable delaycalibration.service
+	systemctl enable calibration_gain_collator.service
 	systemctl enable delaymodel.service
 fi
