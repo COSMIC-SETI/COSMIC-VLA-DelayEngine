@@ -696,12 +696,14 @@ if __name__ == "__main__":
 
     slackbot = None
     if not args.no_slack_post:
-        slackbot = SlackBot("xoxb-18246494320-3792744414148-PgSaUOZvqAW9bclyyZXwTeug", chan_name="active_vla_calibrations", chan_id="C04KTCX4MNV")
-        
-        topic = f"*Logging the VLA calibration in the loop*"
-        slackbot.set_topic(topic)
-        slackbot.post_message(f"""
-        Starting calibration observation process...""")
+        if "SLACK_BOT_TOKEN" in os.environ:
+            slackbot = SlackBot(os.environ["SLACK_BOT_TOKEN"], chan_name="active_vla_calibrations", chan_id="C04KTCX4MNV")
+            topic = f"*Logging the VLA calibration in the loop*"
+            slackbot.set_topic(topic)
+            slackbot.post_message(f"""
+            Starting calibration observation process...""")
+        else:
+            logger.log(getattr(logging, "INFO"), "SLACK_BOT_TOKEN not in environment keys. Will not log to slack.")
         
     #if input fixed delay and fixed phase files are provided, publish them to the filepath hash
     input_fixed_delays = args.fixed_delay_to_update    
