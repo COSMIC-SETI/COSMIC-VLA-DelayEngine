@@ -33,9 +33,9 @@ if __name__ == "__main__":
     postprocessing to complete and update phases.""")
     parser.add_argument("--re-arm-time", type=float, default=20, required=False, help="""After collecting phases
     from GPU nodes and performing necessary actions, the service will sleep for this duration until re-arming""")
-    parser.add_argument("--fit-method", type=str, default="linear", required=False, help="""Pick the complex fitting method
+    parser.add_argument("--fit-method", type=str, default="fourier", required=False, help="""Pick the complex fitting method
     to use for residual calculation. Options are: ["linear", "fourier"]""")
-    parser.add_argument("-o", "--output-dir", type=str, default="/mnt/cosmic-storage-1/data2", required=False, help="""The output directory in 
+    parser.add_argument("-o", "--output-dir", type=str, default="/mnt/cosmic-storage-2/data2", required=False, help="""The output directory in 
     which to place all log folders/files during operation.""")
     parser.add_argument("-f","--fixed-delay-to-update", type=str, required=False, help="""
     csv file path to latest fixed delays that must be modified by the residual delays calculated in this script. If not provided,

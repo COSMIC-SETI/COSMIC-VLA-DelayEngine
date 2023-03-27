@@ -25,7 +25,7 @@ logger.setLevel(logging.DEBUG)
 # create console handler and set level to debug
 ch = logging.StreamHandler()
 ch.setLevel(logging.DEBUG)
-fh = RotatingFileHandler(LOGFILENAME, mode = 'a', maxBytes = 512, backupCount = 0, encoding = None, delay = False)
+fh = RotatingFileHandler(LOGFILENAME, mode = 'a', maxBytes = 1024, backupCount = 0, encoding = None, delay = False)
 fh.setLevel(logging.DEBUG)
 
 # create formatter
@@ -143,7 +143,7 @@ class DelayModel(threading.Thread):
         with  self.itrf_lock:
             self.itrf = df[df.index.notnull()]
             self.antnames = df.index[df.index.notnull()]
-            logger.info("Collected antenna position values. Publishing now...")
+            logger.debug("Collected new antenna position values.")
             redis_publish_dict_to_hash(self.redis_obj, "META_antennaITRF",  self.itrf.to_dict('index'))
     
     def _calc_source_coords_and_lo_eff_from_obs_meta(self, obs_meta):
@@ -160,8 +160,8 @@ class DelayModel(threading.Thread):
             loadtime = obs_meta.get('loadtime')
         except:
             loadtime = None
-            logger.info("No loadtime present in the observation metadata provided.")
-        logger.info(f"Collected ra {ra}, dec {dec}, sslo {sslo} and sideband {sideband} from obs_meta.")
+            logger.debug("No loadtime present in the observation metadata provided.")
+        logger.debug(f"Received ra {ra}, dec {dec}, loadtime {loadtime}, sslo {sslo} and sideband {sideband}.")
 
         #Update source dictionary with newly collected source
         with self.source_points_lock:
@@ -264,7 +264,7 @@ class DelayModel(threading.Thread):
 
                     else:
                         logger.error("Invalid loadtime provided")
-
+                logger.debug(f"""Calculating delays for source:\n{self.source}\nfor loadtime:\n{time_to_load}us\nwith sideband {sideband} and sslo {sslo}.""")
                 tts = [3, (TIME_INTERPOLATION_LENGTH/2) + 3, TIME_INTERPOLATION_LENGTH + 3]
                 tts = np.array(tts) + (t_int * 1e-6) # Interpolate time samples with 3s advance
                 dt = TIME_INTERPOLATION_LENGTH/2
@@ -319,6 +319,7 @@ class DelayModel(threading.Thread):
         """
         df = pd.DataFrame(self.delay_data, index=list(self.itrf.index.values))
         delay_dict = df.to_dict('index')
+        logger.debug(f"""Instructing Antenna to load delays at loadtime:\n{delay_dict[list(delay_dict.keys())[0]]['loadtime_us']}us\nfor source:\n{self.source}""")
         for ant, delays in delay_dict.items():
             #add in the lo values for 2nd compensation phase tracking
             delay_dict[ant] = delays

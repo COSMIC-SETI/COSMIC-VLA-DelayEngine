@@ -196,7 +196,7 @@ class CalibrationGainCollector():
             if message is not None and isinstance(message, dict):
                 msg = json.loads(message.get('data'))
                 if message['channel'] == "observations":
-                    if msg['postprocess'] == "calibrate-uvh5":
+                    if "uvh5_calibrate" in msg['postprocess']["#STAGES"]:
                         self.log_and_post_slackmessage(f"""
                         Received message indicating calibration observation is starting.
                         Collected mcast metadata now...""", severity = "INFO", is_reply = True)
@@ -352,6 +352,12 @@ class CalibrationGainCollector():
                 self.log_and_post_slackmessage(f"""
                 Could not place received frequencies within expected observation frequencies.
                 This likely occured due to the collected fcent not matching fcent used in recording.
+
+                Recorded gains have frequencies for tuning 0:
+                `{collected_frequencies[0][0]}->{collected_frequencies[0][-1]}Hz`
+                and tuning 1:
+                `{collected_frequencies[1][0]}->{collected_frequencies[1][-1]}Hz`
+
                 Ignoring run.
                 """,severity = "ERROR", is_reply = True)
                 return None, None
@@ -360,6 +366,8 @@ class CalibrationGainCollector():
 
     def start(self):
         while True:
+            #clear upfront incase bad calibration gains cause continuation of loop
+            redis_clear_hash_contents(self.redis_obj, GPU_GAINS_REDIS_HASH)
             manual_operation = False
             #Launch function that waits for first valid message:
             if self.input_json_dict is None:
@@ -418,10 +426,16 @@ class CalibrationGainCollector():
                     severity = "INFO", is_reply=True)
 
                 full_observation_channel_frequencies_hz = np.vstack((
-                    np.arange(fcent_hz[0] - (self.nof_channels//2)*channel_bw,
-                    fcent_hz[0] + (self.nof_channels//2)*channel_bw, channel_bw ),
-                    np.arange(fcent_hz[1] - (self.nof_channels//2)*channel_bw,
-                    fcent_hz[1] + (self.nof_channels//2)*channel_bw, channel_bw )
+                    np.arange(
+                        fcent_hz[0] - (self.nof_channels//2)*channel_bw,
+                        fcent_hz[0] + (self.nof_channels//2)*channel_bw,
+                        channel_bw
+                    ),
+                    np.arange(
+                        fcent_hz[1] - (self.nof_channels//2)*channel_bw,
+                        fcent_hz[1] + (self.nof_channels//2)*channel_bw,
+                        channel_bw
+                    )
                 ))
 
                 full_gains_map, frequency_indices = self.correctly_place_residual_phases_and_delays(
@@ -645,7 +659,6 @@ class CalibrationGainCollector():
                     self.log_and_post_slackmessage(f"""
                         Clearing redis hash: {GPU_GAINS_REDIS_HASH} contents in anticipation of next calibration run.
                         """,severity = "DEBUG")
-                    redis_clear_hash_contents(self.redis_obj, GPU_GAINS_REDIS_HASH)
             else:
                 self.log_and_post_slackmessage(f"""
                 Issue waiting on trigger from GPU nodes. Aborting calibration proces...
