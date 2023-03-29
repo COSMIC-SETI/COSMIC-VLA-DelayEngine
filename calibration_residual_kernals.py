@@ -1,4 +1,5 @@
 import numpy as np
+from scipy.stats import median_absolute_deviation as mad
 
 def calc_residuals_from_polyfit(ant_to_gains, observation_frequencies, current_phase_cals, frequency_indices, delay_residual_rejection=100):
         """
@@ -95,6 +96,10 @@ def calc_residuals_from_ifft(ant_to_gains, observation_frequencies, current_phas
     """
     delay_residual_map = {}
     phase_cal_map = {}
+    
+    #Finding the number of antennas here. Maybe there is a better way
+    #nant = len(ant_to_gains.keys())
+    #ant_ind, Also get the antenna index somehow here starting from zero
 
     for ant, phase_matrix in current_phase_cals.items():
         phase_matrix = np.array(phase_matrix,dtype=float)
@@ -110,9 +115,16 @@ def calc_residuals_from_ifft(ant_to_gains, observation_frequencies, current_phas
             nof_pols = int(nof_streams/nof_tunings)
             ifft_abs_matrix = np.abs(np.fft.ifft(new_gain_matrix, axis = 1))
             max_idxs = np.argmax(ifft_abs_matrix,axis=1)
+            
+            """
+            Adding some lines to do the SNR of the peak here
+            sigma = mad(ifft_abs_matrix,axis=1)
+            median = np.median(ifft_abs_matrix,axis=1)
+            """
             residual_delays = np.zeros(nof_streams,dtype=np.float64)
             phase_cals = np.zeros(gain_matrix.shape,dtype=np.float64)
-
+            #SNR = np.zeros((nant, nof_streams),dtype=np.float64) #array to store SNR
+            #sigma_phase = np.zeros((nant, nof_streams),dtype=np.float64) #Array to store spread of phases
             for tune in range(nof_tunings):
                 #find range outside collected gains
                 uncollected_gain_range = np.setdiff1d(np.arange(observation_frequencies[tune,:].size), frequency_indices[tune], assume_unique = True)
@@ -122,7 +134,16 @@ def calc_residuals_from_ifft(ant_to_gains, observation_frequencies, current_phas
                 for pol in range(nof_pols):   #probably unecessary - could do with some matrix mult stuff
                     #some binary logic
                     stream_idx = int(str(tune)+str(pol),2)
+                    
+                    #Calculating the power here and SNR
+                    #signal_pow = ifft_abs_matrix[stream_idx, max_idxs[stream_idx]]
+                    #SNR[antenna_index, stream_idex] = (signal_pow - median[stream_idx])/sigma[stream_idx]
+
                     residual_delay = -1.0 * tlags[max_idxs[stream_idx]]
+                    #Now rather than using the abs(residual_delay) value, use
+                    #if SNR[antenna_index, stream_idex] > 4.0, then update the delay values, if not there is no delay peak and probably np.argmax will 
+                    #pick up some random noise and no point in updating the delay values
+                    
                     if np.abs(residual_delay) > delay_residual_rejection:
                         residual_delays[stream_idx] = 0.0
                         phase_cals[stream_idx] = phase_matrix[stream_idx]
@@ -132,6 +153,9 @@ def calc_residuals_from_ifft(ant_to_gains, observation_frequencies, current_phas
                         phase_cals[stream_idx] = np.angle(new_gain_matrix[stream_idx,:]/gain_from_residual_delay)
                         #zero all phases outside the collected gains range
                         phase_cals[stream_idx, uncollected_gain_range] = 0.0
+                    
+                    #Calculating the spread of phases collected from each antennas from regions where we have actual gain values
+                    #sigma_phase[antenna_index, stream_idex] = np.std(phase_cals[stream_idx, collected_gain_range], axis = 1)
 
             delay_residual_map[ant] = residual_delays
             phase_cal_map[ant] = phase_cals
@@ -139,5 +163,5 @@ def calc_residuals_from_ifft(ant_to_gains, observation_frequencies, current_phas
         else:
             phase_cal_map[ant] = phase_matrix
             delay_residual_map[ant] = np.zeros(nof_streams,dtype=np.float64)
-
-    return delay_residual_map, phase_cal_map
+    
+    return delay_residual_map, phase_cal_map #return SNR and sigma_phase if needed
