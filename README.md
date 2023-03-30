@@ -14,7 +14,7 @@ The above image may be separated into two main processes. Delay coefficient and 
 
 The module makes use of the submoduled repository from the ATA's geometric delay module [delayengine](https://github.com/wfarah/delay_engine), to calculate delay coefficients.
 
-![Geometric delay tracking](https://user-images.githubusercontent.com/28049678/224711832-590c9a4c-c651-4b8f-ab5b-05e72c4eeb2a.jpg)
+![Geometric Delay Tracking](https://user-images.githubusercontent.com/28049678/228798001-1d8be803-695e-4ff4-84a2-f88e700671d4.png)
 
 Along with the reception of source pointing updates on `obs_phase_center` is an optional `loadtime` in micro-seconds. This interface is available to enable exact source-phasing in time. Loadtime can be left as `None`. In the light purple block above, the decision structure for the `delaymodel` is shown. If a new pointing is received or it has been longer than 5s since the last set of delay coefficients were sent out, the received/last recieved `loadtime` is evaluated and delay ceofficients are generated for the appropriate phase centre while `fpga_loadtime` is updated.
 
