@@ -1,0 +1,14 @@
+[Unit]
+Description=Service running the cosmic calibration gain collator process for delay/phase calibration
+After=redis_server.service
+Requires=redis_server.service
+StartLimitInterval=0
+
+[Install]
+WantedBy=multi-user.target
+
+[Service]
+Type=simple
+ExecStart=/home/cosmic/anaconda3/envs/cosmic_vla/bin/python /home/cosmic/dev/COSMIC-VLA-DelayEngine/calibration_gain_collator.py -s 
+Restart=on-failure
+RestartSec=1

@@ -8,7 +8,8 @@ from logging.handlers import RotatingFileHandler
 import redis
 import time
 import json
-from delaycalibration import DelayCalibrationWriter
+from delaycalibration import load_delay_calibrations, CALIBRATION_CACHE_HASH
+from phasecalibration import load_phase_calibrations
 from textwrap import dedent
 import pprint
 from calibration_residual_kernals import calc_residuals_from_polyfit, calc_residuals_from_ifft
@@ -40,15 +41,15 @@ fh.setFormatter(formatter)
 logger.addHandler(ch)
 logger.addHandler(fh)
 
+CONFIG_HASH = "CAL_configuration"
+
 GPU_PHASES_REDIS_HASH = "GPU_calibrationPhases"
 GPU_GAINS_REDIS_HASH = "GPU_calibrationGains"
 GPU_PHASES_REDIS_CHANNEL = "gpu_calibrationphases"
 GPU_GAINS_REDIS_CHANNEL = "gpu_calibrationgains"
 
-CALIBRATION_CACHE_HASH = "CAL_fixedValuePaths"
-
 class CalibrationGainCollector():
-    def __init__(self, redis_obj, user_output_dir, hash_timeout=20, re_arm_time = 30, fit_method = "linear", dry_run = False,
+    def __init__(self, redis_obj, fetch_config = False, user_output_dir='.', hash_timeout=20, re_arm_time = 30, fit_method = "linear", dry_run = False,
     nof_streams = 4, nof_tunings = 2, nof_pols = 2, nof_channels = 1024, slackbot=None, input_fixed_delays = None, input_fixed_phases = None,
     input_json_dict = None, input_fcents = None, input_tbin = None, delay_residual_rejection_threshold = 100):
         self.redis_obj = redis_obj
@@ -69,8 +70,25 @@ class CalibrationGainCollector():
         self.nof_channels = nof_channels
         self.nof_tunings = nof_tunings
         self.nof_pols = nof_pols
-        self.projid = None
-        self.dataset = None    
+        self.projid = "None"
+        self.dataset = "None"   
+
+        if fetch_config:
+            #This will override the above properties IF the redis configuration hash is populated and exists
+            self.configure_from_hash()
+        else:
+            #We want to load the configuration to the redis hash
+            config_dict={
+                "output_dir":self.user_output_dir,
+                "hash_timeout":self.hash_timeout,
+                "re_arm_time":self.re_arm_time,
+                "fit_method":self.fit_method,
+                "input_fixed_delays":self.input_fixed_delays,
+                "input_fixed_phases":self.input_fixed_phases,
+                "delay_residual_rejection_threshold":self.delay_residual_rejection_threshold
+            }
+            redis_publish_dict_to_hash(self.redis_obj, CONFIG_HASH, config_dict) 
+
         redis_clear_hash_contents(self.redis_obj, GPU_GAINS_REDIS_HASH)
         self.meta_obs = redis_hget_keyvalues(self.redis_obj, "META")
         self.ant_feng_map = ant_remotefeng_map.get_antennaFengineDict(self.redis_obj)
@@ -84,12 +102,31 @@ class CalibrationGainCollector():
             `{fixed_value_filepaths["fixed_phase"]}`
             to F-Engines.""", severity="INFO")
             #fixed delays:
-            self.delay_calibration = DelayCalibrationWriter(self.redis_obj, fixed_value_filepaths["fixed_delay"])
-            self.delay_calibration.run()
+            load_delay_calibrations(fixed_value_filepaths["fixed_delay"])
             #fixed phases
-            with open(fixed_value_filepaths["fixed_phase"], 'r') as f:
-                self.update_antenna_phascals(json.load(f))
+            load_phase_calibrations(fixed_value_filepaths["fixed_phase"])
     
+    def configure_from_hash(self):
+        """This function will gather from the redis configuration hash, the required configuration in which
+        to run the calibration process."""
+        try:
+            config = redis_hget_keyvalues(self.redis_obj,CONFIG_HASH)
+        except:
+            self.log_and_post_slackmessage(f"""
+            Calibration process has been requested to run as a service,
+            but the configuration redis hash {CONFIG_HASH},
+            either does not exist or is inaccessible.
+            Using default configuration.""")
+            return
+        
+        self.user_output_dir = config.get("output_dir", self.user_output_dir)
+        self.hash_timeout = config.get("hash_timeout", self.hash_timeout)
+        self.re_arm_time = config.get("re_arm_time", self.re_arm_time)
+        self.fit_method = config.get("fit_method", self.fit_method)
+        self.input_fixed_delays = config.get("input_fixed_delays", self.input_fixed_delays)
+        self.input_fixed_phases = config.get("input_fixed_phases", self.input_fixed_phases)
+        self.delay_residual_rejection_threshold = config.get("delay_residual_rejection_threshold", self.delay_residual_rejection_threshold)
+
     def get_tuningidx_and_start_freq(self, message_key):
         key_split = message_key.split(',')
         tuning = key_split[-1]
@@ -159,7 +196,7 @@ class CalibrationGainCollector():
             if message is not None and isinstance(message, dict):
                 msg = json.loads(message.get('data'))
                 if message['channel'] == "observations":
-                    if msg['postprocess'] == "calibrate-uvh5":
+                    if "uvh5_calibrate" in msg['postprocess']["#STAGES"]:
                         self.log_and_post_slackmessage(f"""
                         Received message indicating calibration observation is starting.
                         Collected mcast metadata now...""", severity = "INFO", is_reply = True)
@@ -315,6 +352,12 @@ class CalibrationGainCollector():
                 self.log_and_post_slackmessage(f"""
                 Could not place received frequencies within expected observation frequencies.
                 This likely occured due to the collected fcent not matching fcent used in recording.
+
+                Recorded gains have frequencies for tuning 0:
+                `{collected_frequencies[0][0]}->{collected_frequencies[0][-1]}Hz`
+                and tuning 1:
+                `{collected_frequencies[1][0]}->{collected_frequencies[1][-1]}Hz`
+
                 Ignoring run.
                 """,severity = "ERROR", is_reply = True)
                 return None, None
@@ -323,6 +366,8 @@ class CalibrationGainCollector():
 
     def start(self):
         while True:
+            #clear upfront incase bad calibration gains cause continuation of loop
+            redis_clear_hash_contents(self.redis_obj, GPU_GAINS_REDIS_HASH)
             manual_operation = False
             #Launch function that waits for first valid message:
             if self.input_json_dict is None:
@@ -332,6 +377,7 @@ class CalibrationGainCollector():
                 manual_operation = True
                 trigger = True
             if trigger:
+                self.configure_from_hash()
                 self.log_and_post_slackmessage(f"""
                     Calibration process has been triggered and is starting.\n
                     Manual run = `{manual_operation}`, 
@@ -380,10 +426,16 @@ class CalibrationGainCollector():
                     severity = "INFO", is_reply=True)
 
                 full_observation_channel_frequencies_hz = np.vstack((
-                    np.arange(fcent_hz[0] - (self.nof_channels//2)*channel_bw,
-                    fcent_hz[0] + (self.nof_channels//2)*channel_bw, channel_bw ),
-                    np.arange(fcent_hz[1] - (self.nof_channels//2)*channel_bw,
-                    fcent_hz[1] + (self.nof_channels//2)*channel_bw, channel_bw )
+                    np.arange(
+                        fcent_hz[0] - (self.nof_channels//2)*channel_bw,
+                        fcent_hz[0] + (self.nof_channels//2)*channel_bw,
+                        channel_bw
+                    ),
+                    np.arange(
+                        fcent_hz[1] - (self.nof_channels//2)*channel_bw,
+                        fcent_hz[1] + (self.nof_channels//2)*channel_bw,
+                        channel_bw
+                    )
                 ))
 
                 full_gains_map, frequency_indices = self.correctly_place_residual_phases_and_delays(
@@ -521,9 +573,7 @@ class CalibrationGainCollector():
                 #Publish new fixed delays to FEngines:
                 if not self.dry_run:
                     self.log_and_post_slackmessage("""Updating fixed-delays on *all* antenna now...""", severity = "INFO", is_reply=True)
-                    self.delay_calibration.calib_csv = modified_fixed_delays_path
-                    self.delay_calibration.run()
-                    redis_publish_dict_to_hash(self.redis_obj, CALIBRATION_CACHE_HASH, {"fixed_delay":modified_fixed_delays_path})
+                    load_delay_calibrations(modified_fixed_delays_path)
                 
                 #-------------------------LOAD THE NEW FIXED PHASES-------------------------#
 
@@ -548,8 +598,7 @@ class CalibrationGainCollector():
                 # Update the fixed phases on the F-Engines and update the fixed_phase path
                 if not self.dry_run:
                     self.log_and_post_slackmessage("""Updating fixed-phases on *all* antenna now...""", severity = "INFO", is_reply=True)
-                    self.update_antenna_phascals(t_phase_cal_map)
-                    redis_publish_dict_to_hash(self.redis_obj, CALIBRATION_CACHE_HASH, {"fixed_phase":modified_fixed_phases_path})
+                    load_phase_calibrations(modified_fixed_phases_path)
                     
                 #-------------------------PLOT GENERATION AND SAVING-------------------------#
                 delay_file_path, phase_file_path_ac, phase_file_path_bd = plot_delay_phase(delay_residual_map, phase_cal_map, 
@@ -584,6 +633,11 @@ class CalibrationGainCollector():
                     """)
                     return
                 else:
+                    #Ensure permissions are correct on the calibration output folder
+                    try:
+                        os.system(f"chown cosmic:cosmic -R {output_dir}")
+                    except:
+                        pass
                     #Sleep
                     self.log_and_post_slackmessage(f"""
                         Sleeping for {self.re_arm_time}s. 
@@ -605,7 +659,6 @@ class CalibrationGainCollector():
                     self.log_and_post_slackmessage(f"""
                         Clearing redis hash: {GPU_GAINS_REDIS_HASH} contents in anticipation of next calibration run.
                         """,severity = "DEBUG")
-                    redis_clear_hash_contents(self.redis_obj, GPU_GAINS_REDIS_HASH)
             else:
                 self.log_and_post_slackmessage(f"""
                 Issue waiting on trigger from GPU nodes. Aborting calibration proces...
@@ -618,6 +671,9 @@ if __name__ == "__main__":
     description=("""Listen for updates to GPU hashes containing calibration phases
     and generate residual delays and load calibration phases to the F-Engines.""")
     )
+    parser.add_argument("-s","--run-as-service", action="store_true",help="""If specified, all other arguments are ignored
+    and the configuration set up is collected on each main loop from the configuration redis Hash. See 
+    configure_calibration_process.py to set the hash contents for configuration.""")
     parser.add_argument("--hash-timeout", type=float,default=10, required=False, help="""How long to wait for calibration 
     postprocessing to complete and update phases.""")
     parser.add_argument("--dry-run", action="store_true", help="""If run as a dry run, delay residuals and phases are 
@@ -638,7 +694,7 @@ if __name__ == "__main__":
     parser.add_argument("--fcentmhz", nargs="*", default=[1000, 1001], help="""fcent values separated by space for observation""")
     parser.add_argument("--tbin", type=float, default=1e-6, required=False, help="""tbin value for observation in seconds""")
     parser.add_argument("--delay-residual-rejection-threshold", type=float, default = 100, required=False, 
-                        help="""The aqbsolute delay residual threshold in nanoseconds above which the process will reject applying the calculated delay
+                        help="""The absolute delay residual threshold in nanoseconds above which the process will reject applying the calculated delay
                         and phase residual calibration values""")
     parser.add_argument('file', type=argparse.FileType('r'), nargs='*')
     args = parser.parse_args()
@@ -655,11 +711,12 @@ if __name__ == "__main__":
     if not args.no_slack_post:
         if "SLACK_BOT_TOKEN" in os.environ:
             slackbot = SlackBot(os.environ["SLACK_BOT_TOKEN"], chan_name="active_vla_calibrations", chan_id="C04KTCX4MNV")
-        
-        topic = f"*Logging the VLA calibration in the loop*"
-        slackbot.set_topic(topic)
-        slackbot.post_message(f"""
-        Starting calibration observation process...""")
+            topic = f"*Logging the VLA calibration in the loop*"
+            slackbot.set_topic(topic)
+            slackbot.post_message(f"""
+            Starting calibration observation process...""")
+        else:
+            logger.log(getattr(logging, "INFO"), "SLACK_BOT_TOKEN not in environment keys. Will not log to slack.")
         
     #if input fixed delay and fixed phase files are provided, publish them to the filepath hash
     input_fixed_delays = args.fixed_delay_to_update    
@@ -673,7 +730,7 @@ if __name__ == "__main__":
             redis_publish_dict_to_hash(redis_obj, CALIBRATION_CACHE_HASH,{"fixed_phase":input_fixed_phases})
             input_fixed_phases = None
 
-    calibrationGainCollector = CalibrationGainCollector(redis_obj, user_output_dir = args.output_dir, hash_timeout = args.hash_timeout, dry_run = args.dry_run,
+    calibrationGainCollector = CalibrationGainCollector(redis_obj, fetch_config = args.run_as_service, user_output_dir = args.output_dir, hash_timeout = args.hash_timeout, dry_run = args.dry_run,
                                 re_arm_time = args.re_arm_time, fit_method = args.fit_method, slackbot = slackbot, input_fixed_delays = input_fixed_delays,
                                 input_fixed_phases = input_fixed_phases, input_json_dict = None if not bool(input_json_dict) else input_json_dict,
                                 input_fcents = args.fcentmhz, input_tbin = args.tbin, delay_residual_rejection_threshold = args.delay_residual_rejection_threshold)
