@@ -445,6 +445,19 @@ class CalibrationGainCollector():
                 if full_gains_map is None:
                     continue
                 
+                #-------------------------SAVE COLLECTED GAINS-------------------------#
+                collected_gain_path = os.path.join(output_dir,f"calibrationgains_{obs_id}.json")
+                self.log_and_post_slackmessage(f"""
+                Saving full collected gains dictionary mapping to:
+                {collected_gain_path}
+                """,severity="INFO")
+                #For json dumping:
+                t_full_gains_map = self.dictnpy_to_dictlist(full_gains_map)
+
+                with open(collected_gain_path, 'w') as f:
+                    json.dump(t_full_gains_map, f)
+
+                #-------------------------PLOT PHASE OF COLLECTED GAINS-------------------------#
                 self.log_and_post_slackmessage("""
                 Plotting phase of the collected recorded gains...
                 """,severity="DEBUG")
