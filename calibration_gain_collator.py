@@ -457,11 +457,11 @@ class CalibrationGainCollector():
                     self.log_and_post_slackmessage(f"""
                     Saving full collected gains dictionary mapping to:
                     {collected_gain_path}
-                    """,severity="INFO")
+                    """,severity="INFO",is_reply = True)
                 except:
                     self.log_and_post_slackmessage(f"""
                     Unable to save calibration gains dictionary. Continuing...
-                    """,severity="WARNING")
+                    """,severity="WARNING",is_reply = True)
                     
                 #-------------------------PLOT PHASE OF COLLECTED GAINS-------------------------#
                 self.log_and_post_slackmessage("""
