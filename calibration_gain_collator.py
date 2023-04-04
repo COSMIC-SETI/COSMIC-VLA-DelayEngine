@@ -143,7 +143,11 @@ class CalibrationGainCollector():
     def dictnpy_to_dictlist(dictnpy):
         dictlst = {}
         for key in dictnpy:
-            dictlst[key] = dictnpy[key].tolist()
+            if np.iscomplexobj(dictnpy[key]):
+                dictlst[key+"_real"] = dictnpy[key].real.tolist()
+                dictlst[key+"_imag"] = dictnpy[key].imag.tolist()
+            else:
+                dictlst[key] = dictnpy[key].tolist()
         return dictlst
 
     def log_and_post_slackmessage(self, message, severity = "INFO", is_reply = False, update_message = False):
@@ -445,6 +449,28 @@ class CalibrationGainCollector():
                 if full_gains_map is None:
                     continue
                 
+                #-------------------------SAVE COLLECTED GAINS-------------------------#
+                collected_gain_path = os.path.join(output_dir,f"gains_{obs_id}.json")
+                #For json dumping:
+                try:
+                    t_full_gains_map = self.dictnpy_to_dictlist(full_gains_map)
+
+                    with open(collected_gain_path, 'w') as f:
+                        json.dump(t_full_gains_map, f)
+
+                    self.log_and_post_slackmessage(f"""
+                    Saving full collected gains dictionary mapping to:
+                    `{collected_gain_path}`
+                    """,severity="INFO",is_reply = True)
+                except Exception as e:
+                    self.log_and_post_slackmessage(f"""
+                    Unable to save calibration gains dictionary. Continuing...
+                    """,severity="WARNING",is_reply = True)
+                    self.log_and_post_slackmessage(f"""
+                    Exception:
+                    {e}""", severity="DEBUG")
+                    
+                #-------------------------PLOT PHASE OF COLLECTED GAINS-------------------------#
                 self.log_and_post_slackmessage("""
                 Plotting phase of the collected recorded gains...
                 """,severity="DEBUG")
