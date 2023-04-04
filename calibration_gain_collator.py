@@ -353,17 +353,25 @@ class CalibrationGainCollector():
                 full_gains_map[ant][tune*2, frequency_indices[tune]] = sorted_gains[0]
                 full_gains_map[ant][(tune*2)+1, frequency_indices[tune]] = sorted_gains[1]
             except:
-                self.log_and_post_slackmessage(f"""
-                Could not place received frequencies within expected observation frequencies.
-                This likely occured due to the collected fcent not matching fcent used in recording.
+                try:
+                    self.log_and_post_slackmessage(f"""
+                    Could not place received frequencies within expected observation frequencies.
+                    This likely occured due to the collected fcent not matching fcent used in recording.
 
-                Recorded gains have frequencies for tuning 0:
-                `{collected_frequencies[0][0]}->{collected_frequencies[0][-1]}Hz`
-                and tuning 1:
-                `{collected_frequencies[1][0]}->{collected_frequencies[1][-1]}Hz`
+                    Recorded gains have frequencies for tuning 0:
+                    `{collected_frequencies[0][0]}->{collected_frequencies[0][-1]}Hz`
+                    and tuning 1:
+                    `{collected_frequencies[1][0]}->{collected_frequencies[1][-1]}Hz`
 
-                Ignoring run.
-                """,severity = "ERROR", is_reply = True)
+                    Ignoring run.
+                    """,severity = "ERROR", is_reply = True)
+                except:
+                    self.log_and_post_slackmessage(f"""
+                    Could not place received frequencies within expected observation frequencies.
+                    This likely occured due to the collected fcent not matching fcent used in recording.
+
+                    Ignoring run.
+                    """,severity = "ERROR", is_reply = True)
                 return None, None
 
         return full_gains_map, frequency_indices
@@ -515,12 +523,20 @@ class CalibrationGainCollector():
                 """, severity = "INFO", is_reply=True)
 
                 #calculate residual delays/phases for the collected frequencies
-                if self.fit_method == "linear":
-                    delay_residual_map, phase_cal_map = calc_residuals_from_polyfit(full_gains_map, full_observation_channel_frequencies_hz,
+                try:
+                    if self.fit_method == "linear":
+                        delay_residual_map, phase_cal_map = calc_residuals_from_polyfit(full_gains_map, full_observation_channel_frequencies_hz,
+                                                                                        last_fixed_phases, frequency_indices, snr_threshold = self.snr_threshold)
+                    elif self.fit_method == "fourier":
+                        delay_residual_map, phase_cal_map = calc_residuals_from_ifft(full_gains_map,full_observation_channel_frequencies_hz,
                                                                                     last_fixed_phases, frequency_indices, snr_threshold = self.snr_threshold)
-                elif self.fit_method == "fourier":
-                    delay_residual_map, phase_cal_map = calc_residuals_from_ifft(full_gains_map,full_observation_channel_frequencies_hz,
-                                                                                last_fixed_phases, frequency_indices, snr_threshold = self.snr_threshold)
+                except Exception as e:
+                    self.log_and_post_slackmessage(f"""
+                    Exception encountered making a call to the calibration kernel:
+                    {e}
+                    Ignoring run and continuing...
+                    """, severity = "ERROR", is_reply=True)
+                    continue
 
                 #-------------------------SAVE RESIDUAL DELAYS-------------------------#
                 #For json dumping:
