@@ -7,7 +7,7 @@ import os
 
 def load_and_configure_calibrations(user_output_dir=None, hash_timeout=20, re_arm_time = 30, fit_method = "linear",
                                     input_fixed_delays = "fixed_delay_init.csv", input_fixed_phases = "fixed_phases_init.json",
-                                    delay_residual_rejection_threshold = 100):
+                                    snr_threshold = 4.0):
     user_output_dir = os.path.abspath(user_output_dir)
     input_fixed_delays = os.path.abspath(input_fixed_delays)
     input_fixed_phases = os.path.abspath(input_fixed_phases)
@@ -18,7 +18,7 @@ def load_and_configure_calibrations(user_output_dir=None, hash_timeout=20, re_ar
         "fit_method":fit_method,
         "input_fixed_delays":input_fixed_delays,
         "input_fixed_phases":input_fixed_phases,
-        "delay_residual_rejection_threshold":delay_residual_rejection_threshold
+        "snr_threshold":snr_threshold
     }
     redis_publish_dict_to_hash(redis_obj, CONFIG_HASH, config_dict)
     load_delay_calibrations(input_fixed_delays)
@@ -43,11 +43,11 @@ if __name__ == "__main__":
     parser.add_argument("-p","--fixed-phase-to-update", type=str, required=False, help="""
     json file path to latest fixed phases that must be modified by the residual phases calculated in this script. If not provided,
     process will try use fixed-phase file path in cache.""")
-    parser.add_argument("--delay-residual-rejection-threshold", type=float, default = 100, required=False, 
-                        help="""The aqbsolute delay residual threshold in nanoseconds above which the process will reject applying the calculated delay
+    parser.add_argument("--snr-threshold", type=float, default = 4.0, required=False, 
+                        help="""The snr threshold above which the process will reject applying the calculated delay
                         and phase residual calibration values""")
     args = parser.parse_args()
     load_and_configure_calibrations(user_output_dir=args.output_dir, hash_timeout=args.hash_timeout, re_arm_time=args.re_arm_time,
                                     fit_method=args.fit_method, input_fixed_delays=args.fixed_delay_to_update,
-                                    input_fixed_phases=args.fixed_phase_to_update, delay_residual_rejection_threshold=args.delay_residual_rejection_threshold)
+                                    input_fixed_phases=args.fixed_phase_to_update, snr_threshold=args.snr_threshold)
     

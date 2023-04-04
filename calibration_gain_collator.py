@@ -51,7 +51,7 @@ GPU_GAINS_REDIS_CHANNEL = "gpu_calibrationgains"
 class CalibrationGainCollector():
     def __init__(self, redis_obj, fetch_config = False, user_output_dir='.', hash_timeout=20, re_arm_time = 30, fit_method = "linear", dry_run = False,
     nof_streams = 4, nof_tunings = 2, nof_pols = 2, nof_channels = 1024, slackbot=None, input_fixed_delays = None, input_fixed_phases = None,
-    input_json_dict = None, input_fcents = None, input_tbin = None, delay_residual_rejection_threshold = 100):
+    input_json_dict = None, input_fcents = None, input_tbin = None, snr_threshold = 4.0):
         self.redis_obj = redis_obj
         self.user_output_dir = user_output_dir
         self.hash_timeout = hash_timeout
@@ -65,7 +65,7 @@ class CalibrationGainCollector():
         self.input_json_dict = input_json_dict
         self.fcents = input_fcents
         self.tbin = input_tbin
-        self.delay_residual_rejection_threshold = delay_residual_rejection_threshold
+        self.snr_threshold = snr_threshold
         self.nof_streams = nof_streams
         self.nof_channels = nof_channels
         self.nof_tunings = nof_tunings
@@ -85,7 +85,7 @@ class CalibrationGainCollector():
                 "fit_method":self.fit_method,
                 "input_fixed_delays":self.input_fixed_delays,
                 "input_fixed_phases":self.input_fixed_phases,
-                "delay_residual_rejection_threshold":self.delay_residual_rejection_threshold
+                "snr_threshold":self.snr_threshold
             }
             redis_publish_dict_to_hash(self.redis_obj, CONFIG_HASH, config_dict) 
 
@@ -125,7 +125,7 @@ class CalibrationGainCollector():
         self.fit_method = config.get("fit_method", self.fit_method)
         self.input_fixed_delays = config.get("input_fixed_delays", self.input_fixed_delays)
         self.input_fixed_phases = config.get("input_fixed_phases", self.input_fixed_phases)
-        self.delay_residual_rejection_threshold = config.get("delay_residual_rejection_threshold", self.delay_residual_rejection_threshold)
+        self.snr_threshold = config.get("snr_threshold", self.snr_threshold)
 
     def get_tuningidx_and_start_freq(self, message_key):
         key_split = message_key.split(',')
@@ -388,7 +388,7 @@ class CalibrationGainCollector():
                     Dry run = `{self.dry_run}`,
                     hash timeout = `{self.hash_timeout}s`, re-arm time = `{self.re_arm_time}s`,
                     fitting method = `{self.fit_method}`,
-                    residual delay rejection threshold = `{self.delay_residual_rejection_threshold}ns`,
+                    snr threshold = `{self.snr_threshold}`,
                     output directory = `{self.user_output_dir}`,
                     projid = {self.projid},
                     dataset_id = {self.dataset}""", severity = "INFO",
@@ -517,10 +517,10 @@ class CalibrationGainCollector():
                 #calculate residual delays/phases for the collected frequencies
                 if self.fit_method == "linear":
                     delay_residual_map, phase_cal_map = calc_residuals_from_polyfit(full_gains_map, full_observation_channel_frequencies_hz,
-                                                                                    last_fixed_phases, frequency_indices, delay_residual_rejection = self.delay_residual_rejection_threshold)
+                                                                                    last_fixed_phases, frequency_indices, snr_threshold = self.snr_threshold)
                 elif self.fit_method == "fourier":
                     delay_residual_map, phase_cal_map = calc_residuals_from_ifft(full_gains_map,full_observation_channel_frequencies_hz,
-                                                                                last_fixed_phases, frequency_indices, delay_residual_rejection = self.delay_residual_rejection_threshold)
+                                                                                last_fixed_phases, frequency_indices, snr_threshold = self.snr_threshold)
 
                 #-------------------------SAVE RESIDUAL DELAYS-------------------------#
                 #For json dumping:
@@ -678,7 +678,7 @@ class CalibrationGainCollector():
                         Dry run = `{self.dry_run}`,
                         hash timeout = `{self.hash_timeout}s`, re-arm time = `{self.re_arm_time}s`,
                         fitting method = `{self.fit_method}`,
-                        residual delay rejection threshold = `{self.delay_residual_rejection_threshold}ns`,
+                        snr threshold = `{self.snr_threshold}`,
                         source = `{self.source}`, 
                         results directory = `{output_dir}`
                     """, severity="INFO", is_reply=False, update_message=True)
@@ -719,8 +719,8 @@ if __name__ == "__main__":
     parser.add_argument("--no-slack-post", action="store_true",help="""If specified, logs are not posted to slack.""")
     parser.add_argument("--fcentmhz", nargs="*", default=[1000, 1001], help="""fcent values separated by space for observation""")
     parser.add_argument("--tbin", type=float, default=1e-6, required=False, help="""tbin value for observation in seconds""")
-    parser.add_argument("--delay-residual-rejection-threshold", type=float, default = 100, required=False, 
-                        help="""The absolute delay residual threshold in nanoseconds above which the process will reject applying the calculated delay
+    parser.add_argument("--snr-threshold", type=float, default = 4.0, required=False, 
+                        help="""The snr threshold above which the process will reject applying the calculated delay
                         and phase residual calibration values""")
     parser.add_argument('file', type=argparse.FileType('r'), nargs='*')
     args = parser.parse_args()
@@ -759,5 +759,5 @@ if __name__ == "__main__":
     calibrationGainCollector = CalibrationGainCollector(redis_obj, fetch_config = args.run_as_service, user_output_dir = args.output_dir, hash_timeout = args.hash_timeout, dry_run = args.dry_run,
                                 re_arm_time = args.re_arm_time, fit_method = args.fit_method, slackbot = slackbot, input_fixed_delays = input_fixed_delays,
                                 input_fixed_phases = input_fixed_phases, input_json_dict = None if not bool(input_json_dict) else input_json_dict,
-                                input_fcents = args.fcentmhz, input_tbin = args.tbin, delay_residual_rejection_threshold = args.delay_residual_rejection_threshold)
+                                input_fcents = args.fcentmhz, input_tbin = args.tbin, snr_threshold = args.snr_threshold)
     calibrationGainCollector.start()
