@@ -71,7 +71,7 @@ def calc_residuals_from_polyfit(ant_to_gains, observation_frequencies, current_p
 
         return delay_residual_map, phase_cal_map
 
-def calc_residuals_from_ifft(ant_to_gains, observation_frequencies, current_phase_cals, frequency_indices, delay_residual_rejection=100):
+def calc_residuals_from_ifft(ant_to_gains, observation_frequencies, current_phase_cals, frequency_indices, snr_threshold=4.0):#, delay_residual_rejection=100):
     """
     Accept mapping of antenna to gains.
     Returns ant to residual delay and ant to phase cal maps.
@@ -86,6 +86,8 @@ def calc_residuals_from_ifft(ant_to_gains, observation_frequencies, current_phas
                             {tuning_idx : np.array(int)}
         delay_residual_rejection float: The absolute delay residual threshold in nanoseconds above which the process will reject applying the calculated delay
                                 and phase residual calibration values
+        snr_threshold float : the snr threshold of delay delta to noise above which a calibration run will be deemed suitable for updates to fixed delays/phases to be
+                        applied.
 
     Return:
         delay_residual_map : A mapping of antenna to delay residual values in nanoseconds of dimension (n_streams)
@@ -96,9 +98,11 @@ def calc_residuals_from_ifft(ant_to_gains, observation_frequencies, current_phas
     """
     delay_residual_map = {}
     phase_cal_map = {}
+    snr_map = {} #the SNR of the ifft
+    sigma_phase_map = {} #the spread of the phases
     
     #Finding the number of antennas here. Maybe there is a better way
-    #nant = len(ant_to_gains.keys())
+    # nant = len(ant_to_gains.keys())
     #ant_ind, Also get the antenna index somehow here starting from zero
 
     for ant, phase_matrix in current_phase_cals.items():
@@ -116,15 +120,16 @@ def calc_residuals_from_ifft(ant_to_gains, observation_frequencies, current_phas
             ifft_abs_matrix = np.abs(np.fft.ifft(new_gain_matrix, axis = 1))
             max_idxs = np.argmax(ifft_abs_matrix,axis=1)
             
-            """
-            Adding some lines to do the SNR of the peak here
-            sigma = mad(ifft_abs_matrix,axis=1)
-            median = np.median(ifft_abs_matrix,axis=1)
-            """
-            residual_delays = np.zeros(nof_streams,dtype=np.float64)
-            phase_cals = np.zeros(gain_matrix.shape,dtype=np.float64)
-            #SNR = np.zeros((nant, nof_streams),dtype=np.float64) #array to store SNR
-            #sigma_phase = np.zeros((nant, nof_streams),dtype=np.float64) #Array to store spread of phases
+        
+            #Adding some lines to do the SNR of the peak here
+            ant_sigma = mad(ifft_abs_matrix,  axis=1)
+            ant_median = np.median(ifft_abs_matrix, axis=1)
+
+            residual_delays = np.zeros(nof_streams, dtype=np.float64)
+            phase_cals = np.zeros(gain_matrix.shape, dtype=np.float64)
+            snr = np.zeros(nof_streams, dtype=np.float64)
+            sigma_phase = np.zeros(nof_streams, dtype=np.float64)
+            
             for tune in range(nof_tunings):
                 #find range outside collected gains
                 uncollected_gain_range = np.setdiff1d(np.arange(observation_frequencies[tune,:].size), frequency_indices[tune], assume_unique = True)
@@ -136,29 +141,27 @@ def calc_residuals_from_ifft(ant_to_gains, observation_frequencies, current_phas
                     stream_idx = int(str(tune)+str(pol),2)
                     
                     #Calculating the power here and SNR
-                    #signal_pow = ifft_abs_matrix[stream_idx, max_idxs[stream_idx]]
-                    #SNR[antenna_index, stream_idex] = (signal_pow - median[stream_idx])/sigma[stream_idx]
+                    snr[stream_idx] = (ifft_abs_matrix[stream_idx, max_idxs[stream_idx]] - ant_median[stream_idx])/ant_sigma[stream_idx]
 
                     residual_delay = -1.0 * tlags[max_idxs[stream_idx]]
                     #Now rather than using the abs(residual_delay) value, use
-                    #if SNR[antenna_index, stream_idex] > 4.0, then update the delay values, if not there is no delay peak and probably np.argmax will 
-                    #pick up some random noise and no point in updating the delay values
-                    
-                    if np.abs(residual_delay) > delay_residual_rejection:
-                        residual_delays[stream_idx] = 0.0
-                        phase_cals[stream_idx] = phase_matrix[stream_idx]
-                    else:
+                    if snr[stream_idx] > 4.0:
                         residual_delays[stream_idx] = residual_delay
                         gain_from_residual_delay = np.exp(2j*np.pi*(observation_frequencies[tune,:]*1e-9)*residual_delays[stream_idx])
                         phase_cals[stream_idx] = np.angle(new_gain_matrix[stream_idx,:]/gain_from_residual_delay)
                         #zero all phases outside the collected gains range
                         phase_cals[stream_idx, uncollected_gain_range] = 0.0
+                    else:
+                        residual_delays[stream_idx] = 0.0
+                        phase_cals[stream_idx] = phase_matrix[stream_idx]
                     
                     #Calculating the spread of phases collected from each antennas from regions where we have actual gain values
-                    #sigma_phase[antenna_index, stream_idex] = np.std(phase_cals[stream_idx, collected_gain_range], axis = 1)
+                    sigma_phase[stream_idx] = np.std(phase_cals[stream_idx, frequency_indices[tune]], axis = 1)
 
             delay_residual_map[ant] = residual_delays
             phase_cal_map[ant] = phase_cals
+            snr_map[ant] = snr
+            sigma_phase_map[ant] = sigma_phase
             
         else:
             phase_cal_map[ant] = phase_matrix
