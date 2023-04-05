@@ -208,6 +208,19 @@ class CalibrationGainCollector():
                         self.dataset = msg['dataset_id']
                         self.meta_obs = redis_hget_keyvalues(self.redis_obj, "META")
                         continue
+                if message['channel'] == "scan_dataset_finish":
+                    self.log_and_post_slackmessage(f"""
+                    Calibration process has been notified that current scan with datasetID =
+                    {msg}
+                    is ending.
+                    Resetting calibration values to:
+                    {self.input_fixed_delays}
+                    and
+                    {self.input_fixed_phases}""")
+                    load_delay_calibrations(self.input_fixed_delays)
+                    load_phase_calibrations(self.input_fixed_phases)
+                    continue
+
                 if message['channel'] == GPU_GAINS_REDIS_CHANNEL:
                     if msg is not None:
                         return msg
@@ -414,8 +427,8 @@ class CalibrationGainCollector():
                 except Exception as e:
                     self.log_and_post_slackmessage(f"""
                     The collection of calibration from GPU gains failed:
-                     {e}
-                     Aborting current trigger.""", severity="ERROR")
+                    {e}
+                    Ignoring current trigger.""", severity="ERROR")
                     if manual_operation:
                         return
                     continue
