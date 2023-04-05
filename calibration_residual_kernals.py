@@ -154,7 +154,7 @@ def calc_residuals_from_ifft(ant_to_gains, observation_frequencies, current_phas
                         phase_cals[stream_idx] = phase_matrix[stream_idx]
                     
                     #Calculating the spread of phases collected from each antennas from regions where we have actual gain values
-                    sigma_phase[stream_idx] = np.std(phase_cals[stream_idx, frequency_indices[tune]], axis = 1)
+                    sigma_phase[stream_idx] = np.std(phase_cals[stream_idx, frequency_indices[tune]])
 
             delay_residual_map[ant] = residual_delays
             phase_cal_map[ant] = phase_cals

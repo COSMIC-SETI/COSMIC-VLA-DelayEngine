@@ -411,8 +411,13 @@ class CalibrationGainCollector():
                 #Start function that waits for hash_timeout before collecting redis hash.
                 try:
                     ant_tune_to_collected_gains, collected_frequencies, self.ants, obs_id = self.collect_phases_for_hash_timeout(self.hash_timeout, manual_operation = manual_operation) 
-                except:
-                    self.log_and_post_slackmessage(f"The collection of calibration from GPU gains failed. Aborting current trigger.", severity="ERROR")
+                except Exception as e:
+                    self.log_and_post_slackmessage(f"""
+                    The collection of calibration from GPU gains failed:
+                     {e}
+                     Aborting current trigger.""", severity="ERROR")
+                    if manual_operation:
+                        return
                     continue
                 
                 #Update output_dir to contain projid, dataset_id and obs_id
@@ -455,6 +460,8 @@ class CalibrationGainCollector():
                     full_observation_channel_frequencies_hz
                 )
                 if full_gains_map is None:
+                    if manual_operation:
+                        return
                     continue
                 
                 #-------------------------SAVE COLLECTED GAINS-------------------------#
@@ -536,6 +543,8 @@ class CalibrationGainCollector():
                     {e}
                     Ignoring run and continuing...
                     """, severity = "ERROR", is_reply=True)
+                    if manual_operation:
+                        return
                     continue
 
                 #-------------------------SAVE RESIDUAL DELAYS-------------------------#
@@ -722,7 +731,7 @@ if __name__ == "__main__":
     calcualted and written to redis/file but not loaded to the F-Engines nor applied to the existing fixed-delays.""")
     parser.add_argument("--re-arm-time", type=float, default=20, required=False, help="""After collecting phases
     from GPU nodes and performing necessary actions, the service will sleep for this duration until re-arming""")
-    parser.add_argument("--fit-method", type=str, default="linear", required=False, help="""Pick the complex fitting method
+    parser.add_argument("--fit-method", type=str, default="fourier", required=False, help="""Pick the complex fitting method
     to use for residual calculation. Options are: ["linear", "fourier"]""")
     parser.add_argument("-o", "--output-dir", type=str, default="/mnt/cosmic-storage-1/data2", required=False, help="""The output directory in 
     which to place all log folders/files during operation.""")
