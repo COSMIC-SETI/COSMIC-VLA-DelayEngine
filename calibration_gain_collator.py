@@ -49,7 +49,7 @@ GPU_PHASES_REDIS_CHANNEL = "gpu_calibrationphases"
 GPU_GAINS_REDIS_CHANNEL = "gpu_calibrationgains"
 
 class CalibrationGainCollector():
-    def __init__(self, redis_obj, fetch_config = False, user_output_dir='.', hash_timeout=20, re_arm_time = 30, fit_method = "linear", dry_run = False,
+    def __init__(self, redis_obj, fetch_config = False, user_output_dir='.', hash_timeout=20, re_arm_time = 30, fit_method = "fourier", dry_run = False,
     nof_streams = 4, nof_tunings = 2, nof_pols = 2, nof_channels = 1024, slackbot=None, input_fixed_delays = None, input_fixed_phases = None,
     input_json_dict = None, input_fcents = None, input_tbin = None, snr_threshold = 4.0):
         self.redis_obj = redis_obj
@@ -79,7 +79,6 @@ class CalibrationGainCollector():
         else:
             #We want to load the configuration to the redis hash
             config_dict={
-                "output_dir":self.user_output_dir,
                 "hash_timeout":self.hash_timeout,
                 "re_arm_time":self.re_arm_time,
                 "fit_method":self.fit_method,
@@ -119,7 +118,6 @@ class CalibrationGainCollector():
             Using default configuration.""")
             return
         
-        self.user_output_dir = config.get("output_dir", self.user_output_dir)
         self.hash_timeout = config.get("hash_timeout", self.hash_timeout)
         self.re_arm_time = config.get("re_arm_time", self.re_arm_time)
         self.fit_method = config.get("fit_method", self.fit_method)
@@ -207,7 +205,16 @@ class CalibrationGainCollector():
                         self.projid = msg['project_id']
                         self.dataset = msg['dataset_id']
                         self.meta_obs = redis_hget_keyvalues(self.redis_obj, "META")
+                    if "MoveARG" in msg['postprocess']:
+                        self.user_output_dir = (msg['postprocess']["MoveARG"]).split('$',1)[0]
+                        self.log_and_post_slackmessage(f"""
+                        Upcoming observation is saving UVH5 files to:
+                        `{self.user_output_dir}`
+                        Calibration solutions and results will be saved to 
+                        the same directory in folder `calibration`.
+                        """, severity = "INFO", is_reply = True)
                         continue
+                        
                 if message['channel'] == "scan_dataset_finish":
                     self.log_and_post_slackmessage(f"""
                     Calibration process has been notified that current scan with datasetID =
