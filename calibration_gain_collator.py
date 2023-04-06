@@ -231,7 +231,7 @@ class CalibrationGainCollector():
                         continue
                         
                 if message['channel'] == "scan_dataset_finish":
-                    self.scan_end = redis_hget_keyvalues(self.redis_obj, "META", keys=["tend_unix"])
+                    self.scan_end = redis_hget_keyvalues(self.redis_obj, "META", keys=["tend_unix"])["tend_unix"]
                     self.scan_is_ending=True
                     self.log_and_post_slackmessage(f"""
                     Calibration process has been notified that current scan with datasetID =
