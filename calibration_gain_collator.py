@@ -188,6 +188,16 @@ class CalibrationGainCollector():
                 self.log_and_post_slackmessage(f'Subscription to "{channel}" unsuccessful.',severity = "ERROR",
                                             is_reply = True)
                 return False
+            
+        if time.time() >= self.scan_end:
+            self.log_and_post_slackmessage(f"""
+            Scan has ended at {time.ctime(self.scan_end)}, fixed delay and fixed phase values are being reset to
+            `{self.input_fixed_delays}`
+            and
+            `{self.input_fixed_phases}`
+            respectively.""", severity="INFO", is_reply = True)
+            load_delay_calibrations(self.input_fixed_delays)
+            load_phase_calibrations(self.input_fixed_phases) 
 
         self.log_and_post_slackmessage("Calibration process is armed and awaiting triggers from GPU nodes.",
                                        severity="INFO", is_reply = False)
@@ -218,16 +228,11 @@ class CalibrationGainCollector():
                         continue
                         
                 if message['channel'] == "scan_dataset_finish":
+                    self.scan_end = redis_hget_keyvalues(self.redis_obj, "META", keys=["tend_unix"])
                     self.log_and_post_slackmessage(f"""
                     Calibration process has been notified that current scan with datasetID =
                     `{msg}`
-                    is ending.
-                    Resetting calibration values to:
-                    `{self.input_fixed_delays}`
-                    and
-                    `{self.input_fixed_phases}`""", severity="INFO", is_reply=True)
-                    load_delay_calibrations(self.input_fixed_delays)
-                    load_phase_calibrations(self.input_fixed_phases)
+                    is ending at {time.ctime(self.scan_end)}""", severity="INFO", is_reply=True)
                     continue
 
                 if message['channel'] == GPU_GAINS_REDIS_CHANNEL:
