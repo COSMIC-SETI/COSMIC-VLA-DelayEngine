@@ -181,12 +181,13 @@ class CalibrationGainCollector():
                 channel to listen for changes to {GPU_GAINS_REDIS_HASH}.""",
             severity="ERROR", is_reply = True)
             return False
-        try:
-            pubsub.subscribe("observations")
-        except redis.RedisError:
-            self.log_and_post_slackmessage(f'Subscription to "observations" unsuccessful.',severity = "ERROR",
-                                           is_reply = True)
-            return False
+        for channel in ["observations", "scan_dataset_finish"]:
+            try:
+                pubsub.subscribe(channel)
+            except redis.RedisError:
+                self.log_and_post_slackmessage(f'Subscription to "{channel}" unsuccessful.',severity = "ERROR",
+                                            is_reply = True)
+                return False
 
         self.log_and_post_slackmessage("Calibration process is armed and awaiting triggers from GPU nodes.",
                                        severity="INFO", is_reply = False)
@@ -194,8 +195,9 @@ class CalibrationGainCollector():
         #Fetch message from subscribed channels
         while True:
             redis_publish_service_pulse(self.redis_obj, SERVICE_NAME)
-            message = pubsub.get_message(timeout=0.001)
+            message = pubsub.get_message()
             if message is not None and isinstance(message, dict):
+                logger.info(f"Awaiting Trigger, received message on {message['channel']}")
                 msg = json.loads(message.get('data'))
                 if message['channel'] == "observations":
                     if "uvh5_calibrate" in msg['postprocess']["#STAGES"]:
@@ -218,12 +220,12 @@ class CalibrationGainCollector():
                 if message['channel'] == "scan_dataset_finish":
                     self.log_and_post_slackmessage(f"""
                     Calibration process has been notified that current scan with datasetID =
-                    {msg}
+                    `{msg}`
                     is ending.
                     Resetting calibration values to:
-                    {self.input_fixed_delays}
+                    `{self.input_fixed_delays}`
                     and
-                    {self.input_fixed_phases}""")
+                    `{self.input_fixed_phases}`""", severity="INFO", is_reply=True)
                     load_delay_calibrations(self.input_fixed_delays)
                     load_phase_calibrations(self.input_fixed_phases)
                     continue
@@ -329,7 +331,10 @@ class CalibrationGainCollector():
             #sort frequencies
             collected_frequencies[tuning] = collected_freq[sortings[tuning]]
             #find sorted frequency indices
-            frequency_indices[tuning] = full_observation_channel_frequencies[tuning,:].searchsorted(collected_frequencies[tuning])
+            obs_frequencies_ascending = full_observation_channel_frequencies[tuning,0] < full_observation_channel_frequencies[tuning,-1]
+            obs_nof_frequencies = len(full_observation_channel_frequencies[tuning,:])
+            sorter = np.arange(obs_nof_frequencies) if obs_frequencies_ascending else np.arange(obs_nof_frequencies, 0, -1)-1
+            frequency_indices[tuning] = full_observation_channel_frequencies[tuning,:].searchsorted(collected_frequencies[tuning], sorter=sorter)
         
         nof_chans_collected_0 = len(collected_frequencies[0]) 
         nof_chans_collected_1 = len(collected_frequencies[1]) 
@@ -458,21 +463,14 @@ class CalibrationGainCollector():
                     Observation meta reports:
                     `source = {self.source}`
                     `basebands = {self.basebands}`
+                    `sidebands = {self.meta_obs["sideband"]}`
                     `fcents = {fcents_mhz} MHz`
                     `tbin = {tbin}`""",
                     severity = "INFO", is_reply=True)
 
                 full_observation_channel_frequencies_hz = np.vstack((
-                    np.arange(
-                        fcent_hz[0] - (self.nof_channels//2)*channel_bw,
-                        fcent_hz[0] + (self.nof_channels//2)*channel_bw,
-                        channel_bw
-                    ),
-                    np.arange(
-                        fcent_hz[1] - (self.nof_channels//2)*channel_bw,
-                        fcent_hz[1] + (self.nof_channels//2)*channel_bw,
-                        channel_bw
-                    )
+                    fcent_hz[0] + np.arange(-self.nof_channels//2, self.nof_channels//2) * channel_bw * self.meta_obs["sideband"][0],
+                    fcent_hz[1] + np.arange(-self.nof_channels//2, self.nof_channels//2) * channel_bw * self.meta_obs["sideband"][1]
                 ))
 
                 full_gains_map, frequency_indices = self.correctly_place_residual_phases_and_delays(
@@ -753,7 +751,7 @@ if __name__ == "__main__":
     from GPU nodes and performing necessary actions, the service will sleep for this duration until re-arming""")
     parser.add_argument("--fit-method", type=str, default="fourier", required=False, help="""Pick the complex fitting method
     to use for residual calculation. Options are: ["linear", "fourier"]""")
-    parser.add_argument("-o", "--output-dir", type=str, default="/mnt/cosmic-storage-1/data2", required=False, help="""The output directory in 
+    parser.add_argument("-o", "--output-dir", type=str, default="/mnt/cosmic-storage-2/data2", required=False, help="""The output directory in 
     which to place all log folders/files during operation.""")
     parser.add_argument("-f","--fixed-delay-to-update", type=str, required=False, help="""
     csv file path to latest fixed delays that must be modified by the residual delays calculated in this script. If not provided,
