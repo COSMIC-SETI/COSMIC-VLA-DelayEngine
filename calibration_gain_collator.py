@@ -72,6 +72,8 @@ class CalibrationGainCollector():
         self.nof_pols = nof_pols
         self.projid = "None"
         self.dataset = "None"   
+        self.scan_is_ending=False
+        self.scan_end=0
 
         if fetch_config:
             #This will override the above properties IF the redis configuration hash is populated and exists
@@ -189,7 +191,7 @@ class CalibrationGainCollector():
                                             is_reply = True)
                 return False
             
-        if time.time() >= self.scan_end:
+        if time.time() >= self.scan_end and self.scan_is_ending:
             self.log_and_post_slackmessage(f"""
             Scan has ended at {time.ctime(self.scan_end)}, fixed delay and fixed phase values are being reset to
             `{self.input_fixed_delays}`
@@ -197,7 +199,8 @@ class CalibrationGainCollector():
             `{self.input_fixed_phases}`
             respectively.""", severity="INFO", is_reply = True)
             load_delay_calibrations(self.input_fixed_delays)
-            load_phase_calibrations(self.input_fixed_phases) 
+            load_phase_calibrations(self.input_fixed_phases)
+            self.scan_is_ending=False 
 
         self.log_and_post_slackmessage("Calibration process is armed and awaiting triggers from GPU nodes.",
                                        severity="INFO", is_reply = False)
@@ -229,6 +232,7 @@ class CalibrationGainCollector():
                         
                 if message['channel'] == "scan_dataset_finish":
                     self.scan_end = redis_hget_keyvalues(self.redis_obj, "META", keys=["tend_unix"])
+                    self.scan_is_ending=True
                     self.log_and_post_slackmessage(f"""
                     Calibration process has been notified that current scan with datasetID =
                     `{msg}`
