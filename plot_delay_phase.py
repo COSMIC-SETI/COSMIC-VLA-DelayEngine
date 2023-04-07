@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 import json
 import argparse
 
-def plot_gain_phase(ant_to_gains, observation_frequencies, fit_method="linear", outdir=None, outfilestem=None, source_name=None):
+def plot_gain_phase(ant_to_gains, observation_frequencies, frequency_indices, fit_method="linear", outdir=None, outfilestem=None, source_name=None):
     """
     Plot the phase of the received complex gain values per antenna. In the event that
     the fitting method is "linear", unwrap the phases, before plotting.
@@ -18,6 +18,7 @@ def plot_gain_phase(ant_to_gains, observation_frequencies, fit_method="linear", 
     Args:
         ant_to_gains : {<ant> : [[complex(gains_pol0_tune0)], [complex(gains_pol1_tune0)], [complex(gains_pol0_tune1)], [complex(gains_pol1_tune1)]], ...}
         observation_frequencies : list of dimension (n_tunings, nchans) in Hz
+        frequency_indices : frequency indices that decide which parts of the plot to make color
         fit_method : str indicating the fit method used in the calibration run
         outdir : str directory path to save the plots to
         outfilestem : str filename stem to use
@@ -39,6 +40,7 @@ def plot_gain_phase(ant_to_gains, observation_frequencies, fit_method="linear", 
     fig, axs = plt.subplots(grid_x, grid_y, sharex  = True, sharey = True, constrained_layout=True, figsize = (12,14))
 
     #Tuning 0
+    uncollected_gains = np.delete(np.arange(observation_frequencies[0,:].size), frequency_indices[0])
     for i in range(grid_x):
         for j in range(grid_y):
             ant_ind = (i*grid_y)+j
@@ -48,8 +50,22 @@ def plot_gain_phase(ant_to_gains, observation_frequencies, fit_method="linear", 
                 if fit_method=="linear":
                     phases_pol0 = np.unwrap(phases_pol0)
                     phases_pol1 = np.unwrap(phases_pol1)
-                axs[i,j].plot(observation_frequencies[0,:], phases_pol0, '.',  label = "AC0")
-                axs[i,j].plot(observation_frequencies[0,:], phases_pol1, '.',  label = "AC1")
+                axs[i,j].plot(
+                    observation_frequencies[0,frequency_indices[0]], phases_pol0[frequency_indices[0]],
+                      '.',  label = "AC0"
+                    )
+                axs[i,j].plot(
+                    observation_frequencies[0,uncollected_gains], phases_pol0[uncollected_gains],
+                      '.', color='grey'
+                      )
+                axs[i,j].plot(
+                    observation_frequencies[0,frequency_indices[0]], phases_pol1[frequency_indices[0]],
+                      '.',  label = "AC1"
+                      )
+                axs[i,j].plot(
+                    observation_frequencies[0,uncollected_gains], phases_pol1[uncollected_gains],
+                      '.', color='grey'
+                      )
                 axs[i,j].set_title(f"{antennas[ant_ind]}_AC")
                 axs[i,j].legend(loc = 'upper right')
 
@@ -73,6 +89,7 @@ def plot_gain_phase(ant_to_gains, observation_frequencies, fit_method="linear", 
     fig, axs = plt.subplots(grid_x, grid_y, sharex  = True, sharey = True, constrained_layout=True, figsize = (12,14))
 
     #Tuning 1
+    uncollected_gains = np.delete(np.arange(observation_frequencies[1,:].size), frequency_indices[1])
     for i in range(grid_x):
         for j in range(grid_y):
             ant_ind = (i*grid_y)+j
@@ -83,8 +100,22 @@ def plot_gain_phase(ant_to_gains, observation_frequencies, fit_method="linear", 
                     phases_pol0 = np.unwrap(phases_pol0)
                     phases_pol1 = np.unwrap(phases_pol1)
 
-                axs[i,j].plot(observation_frequencies[1,:], phases_pol0, '.',  label = "BD0")
-                axs[i,j].plot(observation_frequencies[1,:], phases_pol1, '.',  label = "BD1")
+                axs[i,j].plot(
+                    observation_frequencies[1,frequency_indices[1]], phases_pol0[frequency_indices[1]],
+                      '.',  label = "BD0"
+                    )
+                axs[i,j].plot(
+                    observation_frequencies[1,uncollected_gains], phases_pol0[uncollected_gains],
+                      '.', color='grey'
+                      )
+                axs[i,j].plot(
+                    observation_frequencies[1,frequency_indices[1]], phases_pol1[frequency_indices[1]],
+                      '.',  label = "BD1"
+                      )
+                axs[i,j].plot(
+                    observation_frequencies[1,uncollected_gains], phases_pol1[uncollected_gains],
+                      '.', color='grey'
+                      )
                 axs[i,j].set_title(f"{antennas[ant_ind]}_BD")
                 axs[i,j].legend(loc = 'upper right')
 

@@ -78,7 +78,7 @@ class CalibrationGainCollector():
         if fetch_config:
             #This will override the above properties IF the redis configuration hash is populated and exists
             self.configure_from_hash()
-        else:
+        elif self.input_json_dict is not None:
             #We want to load the configuration to the redis hash
             config_dict={
                 "hash_timeout":self.hash_timeout,
@@ -517,7 +517,8 @@ class CalibrationGainCollector():
                 Plotting phase of the collected recorded gains...
                 """,severity="DEBUG")
 
-                phase_file_path_ac, phase_file_path_bd = plot_gain_phase(full_gains_map, full_observation_channel_frequencies_hz, fit_method = self.fit_method,
+                phase_file_path_ac, phase_file_path_bd = plot_gain_phase(full_gains_map, full_observation_channel_frequencies_hz, frequency_indices, 
+                                                                        fit_method = self.fit_method,
                                                                         outdir = os.path.join(output_dir, "calibration_plots"), outfilestem=obs_id,
                                                                         source_name = self.source)
 
@@ -556,7 +557,7 @@ class CalibrationGainCollector():
                 from the received gain matrix
                 """, severity = "INFO", is_reply=True)
 
-                #calculate residual delays/phases for the collected frequencies
+                #-------------------------CALCULATE RESIDUAL DELAYS AND PHASES FOR COLLECTED GAINS-------------------------#
                 try:
                     if self.fit_method == "linear":
                         delay_residual_map, phase_cal_map = calc_residuals_from_polyfit(full_gains_map, full_observation_channel_frequencies_hz,
@@ -807,8 +808,12 @@ if __name__ == "__main__":
         if not  manual_run:
             redis_publish_dict_to_hash(redis_obj, CALIBRATION_CACHE_HASH,{"fixed_phase":input_fixed_phases})
             input_fixed_phases = None
+    
+    output_dir = os.path.abspath(args.output_dir)
+    if output_dir is not None and not os.path.exists(output_dir):
+        os.makedirs(output_dir)
 
-    calibrationGainCollector = CalibrationGainCollector(redis_obj, fetch_config = args.run_as_service, user_output_dir = args.output_dir, hash_timeout = args.hash_timeout, dry_run = args.dry_run,
+    calibrationGainCollector = CalibrationGainCollector(redis_obj, fetch_config = args.run_as_service, user_output_dir = output_dir, hash_timeout = args.hash_timeout, dry_run = args.dry_run,
                                 re_arm_time = args.re_arm_time, fit_method = args.fit_method, slackbot = slackbot, input_fixed_delays = input_fixed_delays,
                                 input_fixed_phases = input_fixed_phases, input_json_dict = None if not bool(input_json_dict) else input_json_dict,
                                 input_fcents = args.fcentmhz, input_tbin = args.tbin, snr_threshold = args.snr_threshold)
