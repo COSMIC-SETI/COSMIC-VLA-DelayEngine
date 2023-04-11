@@ -93,6 +93,10 @@ def calc_residuals_from_ifft(ant_to_gains, observation_frequencies, current_phas
         phase_cal_map : A mapping of antenna to phase calibration value in radians of dimension (n_streams, n_chans).
                     {<ant> : [[phase_pol0_tune0],[phase_pol1_tune0],
                                         [phase_pol0_tune1],[phase_pol1_tune1]]}, ...} in radians
+        snr_map            : A mapping of antenna to the delay peak SNR value
+                    {<ant> : [[snr_steam0, snr_stream1...],...]}
+        sigma_phase_map    : A mapping of antenna to the standard deviation of the phase calibrations
+                    {<ant> : [[sigma_phase_steam0, sigma_phase_stream1...],...]}
     """
     delay_residual_map = {}
     phase_cal_map = {}
@@ -165,4 +169,4 @@ def calc_residuals_from_ifft(ant_to_gains, observation_frequencies, current_phas
             phase_cal_map[ant] = phase_matrix
             delay_residual_map[ant] = np.zeros(nof_streams,dtype=np.float64)
     
-    return delay_residual_map, phase_cal_map #return SNR and sigma_phase if needed
+    return delay_residual_map, phase_cal_map, snr_map, sigma_phase_map

@@ -10,6 +10,74 @@ import matplotlib.pyplot as plt
 import json
 import argparse
 
+def plot_snr_and_phase_spread(ant_to_snr, ant_to_sigma_phase, outdir=None, outfilestem=None,
+                    source_name=None):
+    """
+    Function that accepts two dictionaries. One being the antenna to ifft SNR of delay-peak to noise,
+    and the other being the antenna to std_deviation of the phase.
+
+    Args:
+        ant_to_snr           : a dictionary mapping of {ant: [snr, 1]}
+        ant_to_sigma_phase   : a dictionary mapping of {ant: [std_deviation, 1]} 
+        outdir               : output directory to which to save the plots
+        outfilestem          : string to prefix to the plot filename
+        source_name          : string name of source to use in plot title
+    Returns:
+        snr_and_sigma_file_path      : str filepath to the snr vs ant and sigma vs ant png plot
+    """
+
+    if outdir is not None and not os.path.exists(outdir):
+        os.makedirs(outdir)
+
+    #Getting the antenna info from the keys
+    antennas = list(ant_to_snr.keys())
+
+    #plotting the snr vs antennas and sigma spread - can assume they contain same ant values as they are
+    #derived at the same point
+    i = 0
+    fig, ax = plt.subplots(2, 1, sharex = True, constrained_layout=True, figsize = (10,12))
+    for ant, snr in ant_to_snr.items():
+        ax[0].plot(i, snr[0], '.', color='royalblue')
+        ax[0].plot(i, snr[1], '.', color='crimson')
+        ax[0].plot(i, snr[2], '.', color='orange')
+        ax[0].plot(i, snr[3], '.', color='forestgreen')
+
+        ax[1].plot(i, ant_to_sigma_phase[ant][0], '.', color='royalblue')
+        ax[1].plot(i, ant_to_sigma_phase[ant][1], '.', color='crimson')
+        ax[1].plot(i, ant_to_sigma_phase[ant][2], '.', color='orange')
+        ax[1].plot(i, ant_to_sigma_phase[ant][3], '.', color='forestgreen')
+        i=i+1
+
+    ax[0].set_title("IFFT delay peak SNR")
+    ax[1].set_title("Standard deviation of phase calibration values")
+
+    ax[0].legend(["AC0","AC1","BD0","BD1"], loc = 'upper right')
+    ax[0].set_ylabel("SNR")
+    ax[1].legend(["AC0","AC1","BD0","BD1"],loc = 'upper right')
+    ax[1].set_ylabel("Std deviation of phase cals")
+    ax[0].set_xticks(np.arange(len(antennas)))
+    ax[0].set_xticklabels(antennas)
+    ax[1].set_xticks(np.arange(len(antennas)))
+    ax[1].set_xticklabels(antennas)
+    fig.suptitle(f"""
+    Calculated SNR and std deviation from
+    {outfilestem}
+    for source {source_name}""")
+    fig.supxlabel("Antennas")
+
+    if outfilestem is not None:
+        outfile_name = outfilestem+"snr_and_sigma_vs_ant.png"
+    else:
+        outfile_name = "snr_and_sigma_vs_ant.png"
+
+    if outdir is not None:
+        delay_file_path = os.path.join(outdir, outfile_name)
+    else:
+        delay_file_path = outfile_name
+         
+    plt.savefig(delay_file_path, dpi = 150)
+    plt.close()
+    
 def plot_gain_phase(ant_to_gains, observation_frequencies, frequency_indices, fit_method="linear", outdir=None, outfilestem=None, source_name=None):
     """
     Plot the phase of the received complex gain values per antenna. In the event that
