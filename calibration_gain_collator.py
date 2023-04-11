@@ -551,12 +551,10 @@ class CalibrationGainCollector():
                         Cleaning up and aborting calibration process...
                     """, severity = "ERROR", is_reply= True)
                     return
+                
                 self.log_and_post_slackmessage(f"""
-                Subtracting fixed phases found in
-                ```{fixed_phase_filepath}```
-                from the received gain matrix
-                """, severity = "INFO", is_reply=True)
-
+                Calculated the following calibration grade values from
+                `{obs_id}`""", severity="INFO", is_reply=True)
                 ant_to_grade = calc_calibration_grade(full_gains_map)
                 grade_file_path = plot_gain_grade(ant_to_grade, outdir=os.path.join(output_dir ,"calibration_plots"), outfilestem=obs_id,
                         source_name = self.source)
@@ -571,6 +569,12 @@ class CalibrationGainCollector():
                                                 thread_ts = self.slack_message_ts)
                     except:
                         self.log_and_post_slackmessage("Error uploading plots", severity="WARNING", is_reply=True)
+
+                self.log_and_post_slackmessage(f"""
+                Subtracting fixed phases found in
+                ```{fixed_phase_filepath}```
+                from the received gain matrix
+                """, severity = "INFO", is_reply=True)
 
                 #-------------------------CALCULATE RESIDUAL DELAYS AND PHASES FOR COLLECTED GAINS-------------------------#
                 try:
