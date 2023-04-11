@@ -12,11 +12,11 @@ from delaycalibration import load_delay_calibrations, CALIBRATION_CACHE_HASH
 from phasecalibration import load_phase_calibrations
 from textwrap import dedent
 import pprint
-from calibration_residual_kernals import calc_residuals_from_polyfit, calc_residuals_from_ifft
+from calibration_residual_kernals import calc_residuals_from_polyfit, calc_residuals_from_ifft, calc_calibration_grade
 from cosmic.observations.slackbot import SlackBot
 from cosmic.fengines import ant_remotefeng_map
 from cosmic.redis_actions import redis_obj, redis_hget_keyvalues, redis_publish_dict_to_hash, redis_clear_hash_contents, redis_publish_service_pulse, redis_publish_dict_to_channel
-from plot_delay_phase import plot_delay_phase, plot_gain_phase
+from plot_delay_phase import plot_delay_phase, plot_gain_phase, plot_snr_and_phase_spread, plot_gain_grade
 
 LOGFILENAME = "/home/cosmic/logs/DelayCalibration.log"
 logger = logging.getLogger('calibration_delays')
@@ -49,9 +49,9 @@ GPU_PHASES_REDIS_CHANNEL = "gpu_calibrationphases"
 GPU_GAINS_REDIS_CHANNEL = "gpu_calibrationgains"
 
 class CalibrationGainCollector():
-    def __init__(self, redis_obj, fetch_config = False, user_output_dir='.', hash_timeout=20, re_arm_time = 30, fit_method = "linear", dry_run = False,
+    def __init__(self, redis_obj, fetch_config = False, user_output_dir='.', hash_timeout=20, re_arm_time = 30, fit_method = "fourier", dry_run = False,
     nof_streams = 4, nof_tunings = 2, nof_pols = 2, nof_channels = 1024, slackbot=None, input_fixed_delays = None, input_fixed_phases = None,
-    input_json_dict = None, input_fcents = None, input_tbin = None, delay_residual_rejection_threshold = 100):
+    input_json_dict = None, input_fcents = None, input_tbin = None, snr_threshold = 4.0):
         self.redis_obj = redis_obj
         self.user_output_dir = user_output_dir
         self.hash_timeout = hash_timeout
@@ -65,27 +65,28 @@ class CalibrationGainCollector():
         self.input_json_dict = input_json_dict
         self.fcents = input_fcents
         self.tbin = input_tbin
-        self.delay_residual_rejection_threshold = delay_residual_rejection_threshold
+        self.snr_threshold = snr_threshold
         self.nof_streams = nof_streams
         self.nof_channels = nof_channels
         self.nof_tunings = nof_tunings
         self.nof_pols = nof_pols
         self.projid = "None"
         self.dataset = "None"   
+        self.scan_is_ending=False
+        self.scan_end=0
 
         if fetch_config:
             #This will override the above properties IF the redis configuration hash is populated and exists
             self.configure_from_hash()
-        else:
+        elif self.input_json_dict is not None:
             #We want to load the configuration to the redis hash
             config_dict={
-                "output_dir":self.user_output_dir,
                 "hash_timeout":self.hash_timeout,
                 "re_arm_time":self.re_arm_time,
                 "fit_method":self.fit_method,
                 "input_fixed_delays":self.input_fixed_delays,
                 "input_fixed_phases":self.input_fixed_phases,
-                "delay_residual_rejection_threshold":self.delay_residual_rejection_threshold
+                "snr_threshold":self.snr_threshold
             }
             redis_publish_dict_to_hash(self.redis_obj, CONFIG_HASH, config_dict) 
 
@@ -119,13 +120,12 @@ class CalibrationGainCollector():
             Using default configuration.""")
             return
         
-        self.user_output_dir = config.get("output_dir", self.user_output_dir)
         self.hash_timeout = config.get("hash_timeout", self.hash_timeout)
         self.re_arm_time = config.get("re_arm_time", self.re_arm_time)
         self.fit_method = config.get("fit_method", self.fit_method)
         self.input_fixed_delays = config.get("input_fixed_delays", self.input_fixed_delays)
         self.input_fixed_phases = config.get("input_fixed_phases", self.input_fixed_phases)
-        self.delay_residual_rejection_threshold = config.get("delay_residual_rejection_threshold", self.delay_residual_rejection_threshold)
+        self.snr_threshold = config.get("snr_threshold", self.snr_threshold)
 
     def get_tuningidx_and_start_freq(self, message_key):
         key_split = message_key.split(',')
@@ -183,12 +183,24 @@ class CalibrationGainCollector():
                 channel to listen for changes to {GPU_GAINS_REDIS_HASH}.""",
             severity="ERROR", is_reply = True)
             return False
-        try:
-            pubsub.subscribe("observations")
-        except redis.RedisError:
-            self.log_and_post_slackmessage(f'Subscription to "observations" unsuccessful.',severity = "ERROR",
-                                           is_reply = True)
-            return False
+        for channel in ["observations", "scan_dataset_finish"]:
+            try:
+                pubsub.subscribe(channel)
+            except redis.RedisError:
+                self.log_and_post_slackmessage(f'Subscription to "{channel}" unsuccessful.',severity = "ERROR",
+                                            is_reply = True)
+                return False
+            
+        if time.time() >= self.scan_end and self.scan_is_ending:
+            self.log_and_post_slackmessage(f"""
+            Scan has ended at {time.ctime(self.scan_end)}, fixed delay and fixed phase values are being reset to
+            `{self.input_fixed_delays}`
+            and
+            `{self.input_fixed_phases}`
+            respectively.""", severity="INFO", is_reply = True)
+            load_delay_calibrations(self.input_fixed_delays)
+            load_phase_calibrations(self.input_fixed_phases)
+            self.scan_is_ending=False 
 
         self.log_and_post_slackmessage("Calibration process is armed and awaiting triggers from GPU nodes.",
                                        severity="INFO", is_reply = False)
@@ -196,8 +208,9 @@ class CalibrationGainCollector():
         #Fetch message from subscribed channels
         while True:
             redis_publish_service_pulse(self.redis_obj, SERVICE_NAME)
-            message = pubsub.get_message(timeout=0.001)
+            message = pubsub.get_message()
             if message is not None and isinstance(message, dict):
+                logger.info(f"Awaiting Trigger, received message on {message['channel']}")
                 msg = json.loads(message.get('data'))
                 if message['channel'] == "observations":
                     if "uvh5_calibrate" in msg['postprocess']["#STAGES"]:
@@ -207,7 +220,25 @@ class CalibrationGainCollector():
                         self.projid = msg['project_id']
                         self.dataset = msg['dataset_id']
                         self.meta_obs = redis_hget_keyvalues(self.redis_obj, "META")
+                    if "MoveARG" in msg['postprocess']:
+                        self.user_output_dir = (msg['postprocess']["MoveARG"]).split('$',1)[0]
+                        self.log_and_post_slackmessage(f"""
+                        Upcoming observation is saving UVH5 files to:
+                        `{self.user_output_dir}`
+                        Calibration solutions and results will be saved to 
+                        the same directory in folder `calibration`.
+                        """, severity = "INFO", is_reply = True)
                         continue
+                        
+                if message['channel'] == "scan_dataset_finish":
+                    self.scan_end = redis_hget_keyvalues(self.redis_obj, "META", keys=["tend_unix"])["tend_unix"]
+                    self.scan_is_ending=True
+                    self.log_and_post_slackmessage(f"""
+                    Calibration process has been notified that current scan with datasetID =
+                    `{msg}`
+                    is ending at {time.ctime(self.scan_end)}""", severity="INFO", is_reply=True)
+                    continue
+
                 if message['channel'] == GPU_GAINS_REDIS_CHANNEL:
                     if msg is not None:
                         return msg
@@ -309,7 +340,10 @@ class CalibrationGainCollector():
             #sort frequencies
             collected_frequencies[tuning] = collected_freq[sortings[tuning]]
             #find sorted frequency indices
-            frequency_indices[tuning] = full_observation_channel_frequencies[tuning,:].searchsorted(collected_frequencies[tuning])
+            obs_frequencies_ascending = full_observation_channel_frequencies[tuning,0] < full_observation_channel_frequencies[tuning,-1]
+            obs_nof_frequencies = len(full_observation_channel_frequencies[tuning,:])
+            sorter = np.arange(obs_nof_frequencies) if obs_frequencies_ascending else np.arange(obs_nof_frequencies, 0, -1)-1
+            frequency_indices[tuning] = full_observation_channel_frequencies[tuning,:].searchsorted(collected_frequencies[tuning], sorter=sorter)
         
         nof_chans_collected_0 = len(collected_frequencies[0]) 
         nof_chans_collected_1 = len(collected_frequencies[1]) 
@@ -353,17 +387,25 @@ class CalibrationGainCollector():
                 full_gains_map[ant][tune*2, frequency_indices[tune]] = sorted_gains[0]
                 full_gains_map[ant][(tune*2)+1, frequency_indices[tune]] = sorted_gains[1]
             except:
-                self.log_and_post_slackmessage(f"""
-                Could not place received frequencies within expected observation frequencies.
-                This likely occured due to the collected fcent not matching fcent used in recording.
+                try:
+                    self.log_and_post_slackmessage(f"""
+                    Could not place received frequencies within expected observation frequencies.
+                    This likely occured due to the collected fcent not matching fcent used in recording.
 
-                Recorded gains have frequencies for tuning 0:
-                `{collected_frequencies[0][0]}->{collected_frequencies[0][-1]}Hz`
-                and tuning 1:
-                `{collected_frequencies[1][0]}->{collected_frequencies[1][-1]}Hz`
+                    Recorded gains have frequencies for tuning 0:
+                    `{collected_frequencies[0][0]}->{collected_frequencies[0][-1]}Hz`
+                    and tuning 1:
+                    `{collected_frequencies[1][0]}->{collected_frequencies[1][-1]}Hz`
 
-                Ignoring run.
-                """,severity = "ERROR", is_reply = True)
+                    Ignoring run.
+                    """,severity = "ERROR", is_reply = True)
+                except:
+                    self.log_and_post_slackmessage(f"""
+                    Could not place received frequencies within expected observation frequencies.
+                    This likely occured due to the collected fcent not matching fcent used in recording.
+
+                    Ignoring run.
+                    """,severity = "ERROR", is_reply = True)
                 return None, None
 
         return full_gains_map, frequency_indices
@@ -388,7 +430,7 @@ class CalibrationGainCollector():
                     Dry run = `{self.dry_run}`,
                     hash timeout = `{self.hash_timeout}s`, re-arm time = `{self.re_arm_time}s`,
                     fitting method = `{self.fit_method}`,
-                    residual delay rejection threshold = `{self.delay_residual_rejection_threshold}ns`,
+                    snr threshold = `{self.snr_threshold}`,
                     output directory = `{self.user_output_dir}`,
                     projid = {self.projid},
                     dataset_id = {self.dataset}""", severity = "INFO",
@@ -403,8 +445,13 @@ class CalibrationGainCollector():
                 #Start function that waits for hash_timeout before collecting redis hash.
                 try:
                     ant_tune_to_collected_gains, collected_frequencies, self.ants, obs_id = self.collect_phases_for_hash_timeout(self.hash_timeout, manual_operation = manual_operation) 
-                except:
-                    self.log_and_post_slackmessage(f"The collection of calibration from GPU gains failed. Aborting current trigger.", severity="ERROR")
+                except Exception as e:
+                    self.log_and_post_slackmessage(f"""
+                    The collection of calibration from GPU gains failed:
+                    {e}
+                    Ignoring current trigger.""", severity="ERROR")
+                    if manual_operation:
+                        return
                     continue
                 
                 #Update output_dir to contain projid, dataset_id and obs_id
@@ -425,21 +472,14 @@ class CalibrationGainCollector():
                     Observation meta reports:
                     `source = {self.source}`
                     `basebands = {self.basebands}`
+                    `sidebands = {self.meta_obs["sideband"]}`
                     `fcents = {fcents_mhz} MHz`
                     `tbin = {tbin}`""",
                     severity = "INFO", is_reply=True)
 
                 full_observation_channel_frequencies_hz = np.vstack((
-                    np.arange(
-                        fcent_hz[0] - (self.nof_channels//2)*channel_bw,
-                        fcent_hz[0] + (self.nof_channels//2)*channel_bw,
-                        channel_bw
-                    ),
-                    np.arange(
-                        fcent_hz[1] - (self.nof_channels//2)*channel_bw,
-                        fcent_hz[1] + (self.nof_channels//2)*channel_bw,
-                        channel_bw
-                    )
+                    fcent_hz[0] + np.arange(-self.nof_channels//2, self.nof_channels//2) * channel_bw * self.meta_obs["sideband"][0],
+                    fcent_hz[1] + np.arange(-self.nof_channels//2, self.nof_channels//2) * channel_bw * self.meta_obs["sideband"][1]
                 ))
 
                 full_gains_map, frequency_indices = self.correctly_place_residual_phases_and_delays(
@@ -447,6 +487,8 @@ class CalibrationGainCollector():
                     full_observation_channel_frequencies_hz
                 )
                 if full_gains_map is None:
+                    if manual_operation:
+                        return
                     continue
                 
                 #-------------------------SAVE COLLECTED GAINS-------------------------#
@@ -475,7 +517,8 @@ class CalibrationGainCollector():
                 Plotting phase of the collected recorded gains...
                 """,severity="DEBUG")
 
-                phase_file_path_ac, phase_file_path_bd = plot_gain_phase(full_gains_map, full_observation_channel_frequencies_hz, fit_method = self.fit_method,
+                phase_file_path_ac, phase_file_path_bd = plot_gain_phase(full_gains_map, full_observation_channel_frequencies_hz, frequency_indices, 
+                                                                        fit_method = self.fit_method,
                                                                         outdir = os.path.join(output_dir, "calibration_plots"), outfilestem=obs_id,
                                                                         source_name = self.source)
 
@@ -508,19 +551,48 @@ class CalibrationGainCollector():
                         Cleaning up and aborting calibration process...
                     """, severity = "ERROR", is_reply= True)
                     return
+                
+                self.log_and_post_slackmessage(f"""
+                Calculated the following calibration grade values from
+                `{obs_id}`""", severity="INFO", is_reply=True)
+                ant_to_grade = calc_calibration_grade(full_gains_map)
+                grade_file_path = plot_gain_grade(ant_to_grade, outdir=os.path.join(output_dir ,"calibration_plots"), outfilestem=obs_id,
+                        source_name = self.source)
+                self.log_and_post_slackmessage(f"""
+                        Saved calibration gain grade plot to: 
+                        `{grade_file_path}`
+                        """, severity = "DEBUG")
+                if self.slackbot is not None:
+                    try:
+                        self.slackbot.upload_file(grade_file_path,
+                                                title =f"Calibration gain grade from\n`{obs_id}`",
+                                                thread_ts = self.slack_message_ts)
+                    except:
+                        self.log_and_post_slackmessage("Error uploading plots", severity="WARNING", is_reply=True)
+
                 self.log_and_post_slackmessage(f"""
                 Subtracting fixed phases found in
                 ```{fixed_phase_filepath}```
                 from the received gain matrix
                 """, severity = "INFO", is_reply=True)
 
-                #calculate residual delays/phases for the collected frequencies
-                if self.fit_method == "linear":
-                    delay_residual_map, phase_cal_map = calc_residuals_from_polyfit(full_gains_map, full_observation_channel_frequencies_hz,
-                                                                                    last_fixed_phases, frequency_indices, delay_residual_rejection = self.delay_residual_rejection_threshold)
-                elif self.fit_method == "fourier":
-                    delay_residual_map, phase_cal_map = calc_residuals_from_ifft(full_gains_map,full_observation_channel_frequencies_hz,
-                                                                                last_fixed_phases, frequency_indices, delay_residual_rejection = self.delay_residual_rejection_threshold)
+                #-------------------------CALCULATE RESIDUAL DELAYS AND PHASES FOR COLLECTED GAINS-------------------------#
+                try:
+                    if self.fit_method == "linear":
+                        delay_residual_map, phase_cal_map = calc_residuals_from_polyfit(full_gains_map, full_observation_channel_frequencies_hz,
+                                                                                        last_fixed_phases, frequency_indices, snr_threshold = self.snr_threshold)
+                    elif self.fit_method == "fourier":
+                        delay_residual_map, phase_cal_map, snr_map, sigma_phase_map = calc_residuals_from_ifft(full_gains_map,full_observation_channel_frequencies_hz,
+                                                                                    last_fixed_phases, frequency_indices, snr_threshold = self.snr_threshold)
+                except Exception as e:
+                    self.log_and_post_slackmessage(f"""
+                    Exception encountered making a call to the calibration kernel:
+                    {e}
+                    Ignoring run and continuing...
+                    """, severity = "ERROR", is_reply=True)
+                    if manual_operation:
+                        return
+                    continue
 
                 #-------------------------SAVE RESIDUAL DELAYS-------------------------#
                 #For json dumping:
@@ -627,6 +699,7 @@ class CalibrationGainCollector():
                     load_phase_calibrations(modified_fixed_phases_path)
                     
                 #-------------------------PLOT GENERATION AND SAVING-------------------------#
+                #Plot phase and delay residuals
                 delay_file_path, phase_file_path_ac, phase_file_path_bd = plot_delay_phase(delay_residual_map, phase_cal_map, 
                         full_observation_channel_frequencies_hz, outdir = os.path.join(output_dir ,"calibration_plots"), outfilestem=obs_id,
                         source_name = self.source)
@@ -653,6 +726,24 @@ class CalibrationGainCollector():
                                                 thread_ts = self.slack_message_ts)
                     except:
                         self.log_and_post_slackmessage("Error uploading plots", severity="WARNING", is_reply=True)
+                
+                #Plot SNR of delay peak and std deviation of phases
+                snr_and_sigma_file_path = plot_snr_and_phase_spread(snr_map, sigma_phase_map, outdir = os.path.join(output_dir ,"calibration_plots"), outfilestem=obs_id,
+                        source_name = self.source)
+                
+                self.log_and_post_slackmessage(f"""
+                        Saved  snr and phase spread plot to: 
+                        `{snr_and_sigma_file_path}`
+                        """, severity = "DEBUG")
+                if self.slackbot is not None:
+                    try:
+                        self.slackbot.upload_file(snr_and_sigma_file_path,
+                                                title =f"Delay peak SNR and std_deviation of phases from\n`{obs_id}`",
+                                                thread_ts = self.slack_message_ts)
+                    except:
+                        self.log_and_post_slackmessage("Error uploading plots", severity="WARNING", is_reply=True)
+
+                #-------------------------FINISH OFF CALIBRATION RUN-------------------------#
                 if manual_operation:
                     self.log_and_post_slackmessage(f"""
                     Manual calibration process run complete.
@@ -678,7 +769,7 @@ class CalibrationGainCollector():
                         Dry run = `{self.dry_run}`,
                         hash timeout = `{self.hash_timeout}s`, re-arm time = `{self.re_arm_time}s`,
                         fitting method = `{self.fit_method}`,
-                        residual delay rejection threshold = `{self.delay_residual_rejection_threshold}ns`,
+                        snr threshold = `{self.snr_threshold}`,
                         source = `{self.source}`, 
                         results directory = `{output_dir}`
                     """, severity="INFO", is_reply=False, update_message=True)
@@ -706,9 +797,9 @@ if __name__ == "__main__":
     calcualted and written to redis/file but not loaded to the F-Engines nor applied to the existing fixed-delays.""")
     parser.add_argument("--re-arm-time", type=float, default=20, required=False, help="""After collecting phases
     from GPU nodes and performing necessary actions, the service will sleep for this duration until re-arming""")
-    parser.add_argument("--fit-method", type=str, default="linear", required=False, help="""Pick the complex fitting method
+    parser.add_argument("--fit-method", type=str, default="fourier", required=False, help="""Pick the complex fitting method
     to use for residual calculation. Options are: ["linear", "fourier"]""")
-    parser.add_argument("-o", "--output-dir", type=str, default="/mnt/cosmic-storage-1/data2", required=False, help="""The output directory in 
+    parser.add_argument("-o", "--output-dir", type=str, default="/mnt/cosmic-storage-2/data2", required=False, help="""The output directory in 
     which to place all log folders/files during operation.""")
     parser.add_argument("-f","--fixed-delay-to-update", type=str, required=False, help="""
     csv file path to latest fixed delays that must be modified by the residual delays calculated in this script. If not provided,
@@ -719,8 +810,8 @@ if __name__ == "__main__":
     parser.add_argument("--no-slack-post", action="store_true",help="""If specified, logs are not posted to slack.""")
     parser.add_argument("--fcentmhz", nargs="*", default=[1000, 1001], help="""fcent values separated by space for observation""")
     parser.add_argument("--tbin", type=float, default=1e-6, required=False, help="""tbin value for observation in seconds""")
-    parser.add_argument("--delay-residual-rejection-threshold", type=float, default = 100, required=False, 
-                        help="""The absolute delay residual threshold in nanoseconds above which the process will reject applying the calculated delay
+    parser.add_argument("--snr-threshold", type=float, default = 4.0, required=False, 
+                        help="""The snr threshold above which the process will reject applying the calculated delay
                         and phase residual calibration values""")
     parser.add_argument('file', type=argparse.FileType('r'), nargs='*')
     args = parser.parse_args()
@@ -755,9 +846,13 @@ if __name__ == "__main__":
         if not  manual_run:
             redis_publish_dict_to_hash(redis_obj, CALIBRATION_CACHE_HASH,{"fixed_phase":input_fixed_phases})
             input_fixed_phases = None
+    
+    output_dir = os.path.abspath(args.output_dir)
+    if output_dir is not None and not os.path.exists(output_dir):
+        os.makedirs(output_dir)
 
-    calibrationGainCollector = CalibrationGainCollector(redis_obj, fetch_config = args.run_as_service, user_output_dir = args.output_dir, hash_timeout = args.hash_timeout, dry_run = args.dry_run,
+    calibrationGainCollector = CalibrationGainCollector(redis_obj, fetch_config = args.run_as_service, user_output_dir = output_dir, hash_timeout = args.hash_timeout, dry_run = args.dry_run,
                                 re_arm_time = args.re_arm_time, fit_method = args.fit_method, slackbot = slackbot, input_fixed_delays = input_fixed_delays,
                                 input_fixed_phases = input_fixed_phases, input_json_dict = None if not bool(input_json_dict) else input_json_dict,
-                                input_fcents = args.fcentmhz, input_tbin = args.tbin, delay_residual_rejection_threshold = args.delay_residual_rejection_threshold)
+                                input_fcents = args.fcentmhz, input_tbin = args.tbin, snr_threshold = args.snr_threshold)
     calibrationGainCollector.start()
