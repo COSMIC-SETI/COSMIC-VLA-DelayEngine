@@ -12,11 +12,11 @@ from delaycalibration import load_delay_calibrations, CALIBRATION_CACHE_HASH
 from phasecalibration import load_phase_calibrations
 from textwrap import dedent
 import pprint
-from calibration_residual_kernals import calc_residuals_from_polyfit, calc_residuals_from_ifft
+from calibration_residual_kernals import calc_residuals_from_polyfit, calc_residuals_from_ifft, calc_calibration_grade
 from cosmic.observations.slackbot import SlackBot
 from cosmic.fengines import ant_remotefeng_map
 from cosmic.redis_actions import redis_obj, redis_hget_keyvalues, redis_publish_dict_to_hash, redis_clear_hash_contents, redis_publish_service_pulse, redis_publish_dict_to_channel
-from plot_delay_phase import plot_delay_phase, plot_gain_phase, plot_snr_and_phase_spread
+from plot_delay_phase import plot_delay_phase, plot_gain_phase, plot_snr_and_phase_spread, plot_gain_grade
 
 LOGFILENAME = "/home/cosmic/logs/DelayCalibration.log"
 logger = logging.getLogger('calibration_delays')
@@ -557,6 +557,21 @@ class CalibrationGainCollector():
                 from the received gain matrix
                 """, severity = "INFO", is_reply=True)
 
+                ant_to_grade = calc_calibration_grade(full_gains_map)
+                grade_file_path = plot_gain_grade(ant_to_grade, outdir=os.path.join(output_dir ,"calibration_plots"), outfilestem=obs_id,
+                        source_name = self.source)
+                self.log_and_post_slackmessage(f"""
+                        Saved calibration gain grade plot to: 
+                        `{grade_file_path}`
+                        """, severity = "DEBUG")
+                if self.slackbot is not None:
+                    try:
+                        self.slackbot.upload_file(grade_file_path,
+                                                title =f"Calibration gain grade from\n`{obs_id}`",
+                                                thread_ts = self.slack_message_ts)
+                    except:
+                        self.log_and_post_slackmessage("Error uploading plots", severity="WARNING", is_reply=True)
+
                 #-------------------------CALCULATE RESIDUAL DELAYS AND PHASES FOR COLLECTED GAINS-------------------------#
                 try:
                     if self.fit_method == "linear":
@@ -711,7 +726,6 @@ class CalibrationGainCollector():
                 #Plot SNR of delay peak and std deviation of phases
                 snr_and_sigma_file_path = plot_snr_and_phase_spread(snr_map, sigma_phase_map, outdir = os.path.join(output_dir ,"calibration_plots"), outfilestem=obs_id,
                         source_name = self.source)
-
                 
                 self.log_and_post_slackmessage(f"""
                         Saved  snr and phase spread plot to: 

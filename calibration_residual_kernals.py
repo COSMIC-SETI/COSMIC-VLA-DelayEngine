@@ -1,6 +1,25 @@
 import numpy as np
 from scipy.stats import median_abs_deviation as mad
 
+def calc_calibration_grade(ant_to_gains):
+    """
+    Accept mapping of antenna to gains.
+    Returns ant to calibration grade.
+
+    Args:
+        ant_to_gains : A dictionary mapping of antenna name to complex gain matrix of dimension (n_streams, n_chans).
+                    {<ant> : [[complex(gains_pol0_tune0)], [complex(gains_pol1_tune0)], [complex(gains_pol0_tune1)], [complex(gains_pol1_tune1)]], ...}
+
+    Return:
+        ant_to_grade: A dictionary mapping of antenna name to grade of calibration run.
+                    {ant : [[grade, ], ...]}
+    """
+    ant_to_grade = {}
+    for ant, gain_matrix in ant_to_gains.items():
+        gain_matrix = np.array(gain_matrix,dtype=np.complex64)
+        ant_to_grade[ant] = np.abs(np.sum(gain_matrix, axis=1))/np.sum(np.abs(gain_matrix),axis=1)
+    return ant_to_grade
+
 def calc_residuals_from_polyfit(ant_to_gains, observation_frequencies, current_phase_cals, frequency_indices, snr_threshold=4.0):
         """
         Accept mapping of antenna to gains along with the observation frequencies of dimension (n_tunings, n_chans). In the event 

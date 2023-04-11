@@ -10,6 +10,62 @@ import matplotlib.pyplot as plt
 import json
 import argparse
 
+def plot_gain_grade(ant_to_grade, outdir=None, outfilestem=None,
+                    source_name=None):
+    """
+    Function that accepts a dictionary of antenna to calibration grade and plots the results.
+
+    Args:
+        ant_to_grade         : a dictionary mapping of {ant: [grade, 1]}
+        outdir               : output directory to which to save the plots
+        outfilestem          : string to prefix to the plot filename
+        source_name          : string name of source to use in plot title
+    
+    Returns:
+        grade_file_path      : str filepath to the snr vs ant and sigma vs ant png plot    
+    """
+
+    if outdir is not None and not os.path.exists(outdir):
+        os.makedirs(outdir)
+
+    #Getting the antenna info from the keys
+    antennas = list(ant_to_grade.keys())
+
+    #plotting the snr vs antennas and sigma spread - can assume they contain same ant values as they are
+    #derived at the same point
+    i = 0
+    fig, ax = plt.subplots(1, 1, sharex = True, constrained_layout=True, figsize = (10,8))
+    for ant, grade in ant_to_grade.items():
+        ax.plot(i, grade[0], '.', color='royalblue')
+        ax.plot(i, grade[1], '.', color='crimson')
+        ax.plot(i, grade[2], '.', color='orange')
+        ax.plot(i, grade[3], '.', color='forestgreen')
+        i=i+1
+
+    ax.legend(["AC0","AC1","BD0","BD1"], loc = 'upper right')
+    ax.set_ylabel("abs(sum(gains))/sum(abs(gains))")
+    ax.set_xticks(np.arange(len(antennas)))
+    ax.set_xticklabels(antennas)
+    fig.suptitle(f"""
+    Calculated Gain grade from
+    {outfilestem}
+    for source {source_name}""")
+    fig.supxlabel("Antennas")
+
+    if outfilestem is not None:
+        outfile_name = outfilestem+"grade_vs_ant.png"
+    else:
+        outfile_name = "grade_vs_ant.png"
+
+    if outdir is not None:
+        grade_file_path = os.path.join(outdir, outfile_name)
+    else:
+        grade_file_path = outfile_name
+         
+    plt.savefig(grade_file_path, dpi = 150)
+    plt.close()
+    return grade_file_path
+
 def plot_snr_and_phase_spread(ant_to_snr, ant_to_sigma_phase, outdir=None, outfilestem=None,
                     source_name=None):
     """
@@ -71,12 +127,13 @@ def plot_snr_and_phase_spread(ant_to_snr, ant_to_sigma_phase, outdir=None, outfi
         outfile_name = "snr_and_sigma_vs_ant.png"
 
     if outdir is not None:
-        delay_file_path = os.path.join(outdir, outfile_name)
+        snr_and_sigma_file_path = os.path.join(outdir, outfile_name)
     else:
-        delay_file_path = outfile_name
+        snr_and_sigma_file_path = outfile_name
          
-    plt.savefig(delay_file_path, dpi = 150)
+    plt.savefig(snr_and_sigma_file_path, dpi = 150)
     plt.close()
+    return snr_and_sigma_file_path
     
 def plot_gain_phase(ant_to_gains, observation_frequencies, frequency_indices, fit_method="linear", outdir=None, outfilestem=None, source_name=None):
     """
