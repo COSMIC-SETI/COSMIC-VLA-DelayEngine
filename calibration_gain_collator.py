@@ -12,7 +12,7 @@ from delaycalibration import load_delay_calibrations, CALIBRATION_CACHE_HASH
 from phasecalibration import load_phase_calibrations
 from textwrap import dedent
 import pprint
-from calibration_residual_kernals import calc_residuals_from_polyfit, calc_residuals_from_ifft, calc_calibration_grade
+from calibration_residual_kernals import calc_residuals_from_polyfit, calc_residuals_from_ifft, calc_calibration_ant_grade, calc_calibration_freq_grade, calc_full_grade
 from cosmic.observations.slackbot import SlackBot
 from cosmic.fengines import ant_remotefeng_map
 from cosmic.redis_actions import redis_obj, redis_hget_keyvalues, redis_publish_dict_to_hash, redis_clear_hash_contents, redis_publish_service_pulse, redis_publish_dict_to_channel
@@ -78,7 +78,7 @@ class CalibrationGainCollector():
         if fetch_config:
             #This will override the above properties IF the redis configuration hash is populated and exists
             self.configure_from_hash()
-        elif self.input_json_dict is not None:
+        elif self.input_json_dict is None:
             #We want to load the configuration to the redis hash
             config_dict={
                 "hash_timeout":self.hash_timeout,
@@ -553,10 +553,15 @@ class CalibrationGainCollector():
                     return
                 
                 self.log_and_post_slackmessage(f"""
-                Calculated the following calibration grade values from
-                `{obs_id}`""", severity="INFO", is_reply=True)
-                ant_to_grade = calc_calibration_grade(full_gains_map)
-                grade_file_path = plot_gain_grade(ant_to_grade, outdir=os.path.join(output_dir ,"calibration_plots"), outfilestem=obs_id,
+                Subtracting fixed phases found in
+                ```{fixed_phase_filepath}```
+                from the received gain matrix
+                """, severity = "INFO", is_reply=True)
+
+                ant_to_grade = calc_calibration_ant_grade(full_gains_map)
+                freq_to_grade = calc_calibration_freq_grade(full_gains_map)
+                full_grade = calc_full_grade(full_gains_map)
+                grade_file_path = plot_gain_grade(ant_to_grade, freq_to_grade, outdir=os.path.join(output_dir ,"calibration_plots"), outfilestem=obs_id,
                         source_name = self.source)
                 self.log_and_post_slackmessage(f"""
                         Saved calibration gain grade plot to: 
@@ -569,6 +574,10 @@ class CalibrationGainCollector():
                                                 thread_ts = self.slack_message_ts)
                     except:
                         self.log_and_post_slackmessage("Error uploading plots", severity="WARNING", is_reply=True)
+                self.log_and_post_slackmessage(f"""
+                        Calculated overall grade for calibration recording of:
+                        `{full_grade}`
+                        """, severity = "INFO", is_reply=True)
 
                 self.log_and_post_slackmessage(f"""
                 Subtracting fixed phases found in

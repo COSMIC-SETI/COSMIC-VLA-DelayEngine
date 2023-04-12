@@ -1,10 +1,10 @@
 import numpy as np
 from scipy.stats import median_abs_deviation as mad
 
-def calc_calibration_grade(ant_to_gains):
+def calc_calibration_ant_grade(ant_to_gains):
     """
     Accept mapping of antenna to gains.
-    Returns ant to calibration grade.
+    Returns ant to calibration grade for antenna.
 
     Args:
         ant_to_gains : A dictionary mapping of antenna name to complex gain matrix of dimension (n_streams, n_chans).
@@ -19,6 +19,56 @@ def calc_calibration_grade(ant_to_gains):
         gain_matrix = np.array(gain_matrix,dtype=np.complex64)
         ant_to_grade[ant] = np.abs(np.sum(gain_matrix, axis=1))/np.sum(np.abs(gain_matrix),axis=1)
     return ant_to_grade
+
+def calc_calibration_freq_grade(ant_to_gains):
+    """
+    Accept mapping of antenna to gains.
+    Returns ant to calibration grade for frequency.
+
+    Args:
+        ant_to_gains : A dictionary mapping of antenna name to complex gain matrix of dimension (n_streams, n_chans).
+                    {<ant> : [[complex(gains_pol0_tune0)], [complex(gains_pol1_tune0)], [complex(gains_pol0_tune1)], [complex(gains_pol1_tune1)]], ...}
+
+    Return:
+        freq_to_grade: A matrix of shape (nof_streams, nof_channels)
+    """
+    antenna = list(ant_to_gains.keys())
+    sum_freq = np.zeros(np.array(ant_to_gains[antenna[0]]).shape)
+    sum_abs_freq = np.zeros(np.array(ant_to_gains[antenna[0]]).shape)
+    freq_to_grade = np.ones(np.array(ant_to_gains[antenna[0]]).shape)
+    for _, gain_matrix in ant_to_gains.items():
+        gain_matrix = np.array(gain_matrix,dtype=np.complex64)
+        sum_freq = sum_freq + gain_matrix
+        sum_abs_freq = np.abs(sum_abs_freq) + np.abs(gain_matrix)
+
+    for stream in range(freq_to_grade.shape[0]):
+        nonzero_indexes = np.where(sum_abs_freq[stream,:] != 0)[0]
+        freq_to_grade[stream,nonzero_indexes] = np.abs(sum_freq[stream,nonzero_indexes])/sum_abs_freq[stream,nonzero_indexes]
+
+    return freq_to_grade
+
+def calc_full_grade(ant_to_gains):
+    """
+    Accept mapping of antenna to gains.
+    Returns a single value which is the full sum across all frequencies and antenna.
+
+    Args:
+        ant_to_gains : A dictionary mapping of antenna name to complex gain matrix of dimension (n_streams, n_chans).
+                    {<ant> : [[complex(gains_pol0_tune0)], [complex(gains_pol1_tune0)], [complex(gains_pol0_tune1)], [complex(gains_pol1_tune1)]], ...}
+
+    Return:
+        grade: A single grade value
+    """
+    antenna = list(ant_to_gains.keys())
+    sum_freq = np.zeros(np.array(ant_to_gains[antenna[0]]).shape)
+    sum_abs_freq = np.zeros(np.array(ant_to_gains[antenna[0]]).shape)
+    for _, gain_matrix in ant_to_gains.items():
+        gain_matrix = np.array(gain_matrix,dtype=np.complex64)
+        sum_freq = sum_freq + gain_matrix
+        sum_abs_freq = np.abs(sum_abs_freq) + np.abs(gain_matrix)
+
+    grade = np.abs(np.sum(sum_freq))/np.sum(sum_abs_freq)
+    return grade
 
 def calc_residuals_from_polyfit(ant_to_gains, observation_frequencies, current_phase_cals, frequency_indices, snr_threshold=4.0):
         """

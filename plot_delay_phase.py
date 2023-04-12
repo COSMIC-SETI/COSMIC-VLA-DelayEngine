@@ -10,13 +10,14 @@ import matplotlib.pyplot as plt
 import json
 import argparse
 
-def plot_gain_grade(ant_to_grade, outdir=None, outfilestem=None,
+def plot_gain_grade(ant_to_grade, freq_to_grade, outdir=None, outfilestem=None,
                     source_name=None):
     """
     Function that accepts a dictionary of antenna to calibration grade and plots the results.
 
     Args:
         ant_to_grade         : a dictionary mapping of {ant: [grade, 1]}
+        freq_to_grade        : A matrix of shape (nof_streams, nof_channels)
         outdir               : output directory to which to save the plots
         outfilestem          : string to prefix to the plot filename
         source_name          : string name of source to use in plot title
@@ -30,32 +31,41 @@ def plot_gain_grade(ant_to_grade, outdir=None, outfilestem=None,
 
     #Getting the antenna info from the keys
     antennas = list(ant_to_grade.keys())
+    nof_streams, nof_frequencies = np.array(freq_to_grade).shape
 
     #plotting the snr vs antennas and sigma spread - can assume they contain same ant values as they are
     #derived at the same point
     i = 0
-    fig, ax = plt.subplots(1, 1, sharex = True, constrained_layout=True, figsize = (10,8))
+    fig, ax = plt.subplots(2, 1, constrained_layout=True, figsize = (10,12))
     for ant, grade in ant_to_grade.items():
-        ax.plot(i, grade[0], '.', color='royalblue')
-        ax.plot(i, grade[1], '.', color='crimson')
-        ax.plot(i, grade[2], '.', color='orange')
-        ax.plot(i, grade[3], '.', color='forestgreen')
+        ax[0].plot(i, grade[0], '.', color='royalblue')
+        ax[0].plot(i, grade[1], '.', color='crimson')
+        ax[0].plot(i, grade[2], '.', color='orange')
+        ax[0].plot(i, grade[3], '.', color='forestgreen')
         i=i+1
+    colorlist = ['royalblue', 'crimson', 'orange', 'forestgreen']
+    for row in range(nof_streams):
+        ax[1].plot(np.arange(nof_frequencies), freq_to_grade[row, :], '.', color = colorlist[row])
 
-    ax.legend(["AC0","AC1","BD0","BD1"], loc = 'upper right')
-    ax.set_ylabel("abs(sum(gains))/sum(abs(gains))")
-    ax.set_xticks(np.arange(len(antennas)))
-    ax.set_xticklabels(antennas)
+    ax[0].legend(["AC0","AC1","BD0","BD1"], loc = 'upper right')
+    ax[1].legend(["AC0","AC1","BD0","BD1"], loc = 'upper right')
+    ax[0].set_ylabel("abs(sum(gains_f))/sum(abs(gains_f))")
+    ax[1].set_ylabel("abs(sum(gains_a))/sum(abs(gains_a))")
+    ax[0].set_xticks(np.arange(len(antennas)))
+    ax[0].set_xticklabels(antennas)
+    ax[0].set_xlabel("antenna")
+    ax[1].set_xlabel("channels indices")
+    ax[1].set_title("Calculated grade across antenna per frequency")
+    ax[0].set_title("Calculated grade across freqeuncy per antenna")
     fig.suptitle(f"""
     Calculated Gain grade from
     {outfilestem}
     for source {source_name}""")
-    fig.supxlabel("Antennas")
 
     if outfilestem is not None:
-        outfile_name = outfilestem+"grade_vs_ant.png"
+        outfile_name = outfilestem+"grade_plot.png"
     else:
-        outfile_name = "grade_vs_ant.png"
+        outfile_name = "grade_plot.png"
 
     if outdir is not None:
         grade_file_path = os.path.join(outdir, outfile_name)
