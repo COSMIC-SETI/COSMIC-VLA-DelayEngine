@@ -51,7 +51,7 @@ GPU_GAINS_REDIS_CHANNEL = "gpu_calibrationgains"
 class CalibrationGainCollector():
     def __init__(self, redis_obj, fetch_config = False, user_output_dir='.', hash_timeout=20, re_arm_time = 30, fit_method = "fourier", dry_run = False,
     nof_streams = 4, nof_tunings = 2, nof_pols = 2, nof_channels = 1024, slackbot=None, input_fixed_delays = None, input_fixed_phases = None,
-    input_json_dict = None, input_fcents = None, input_tbin = None, snr_threshold = 4.0):
+    input_json_dict = None, input_fcents = None, input_sideband = None, input_tbin = None, snr_threshold = 4.0):
         self.redis_obj = redis_obj
         self.user_output_dir = user_output_dir
         self.hash_timeout = hash_timeout
@@ -64,6 +64,7 @@ class CalibrationGainCollector():
         self.input_fixed_phases = input_fixed_phases
         self.input_json_dict = input_json_dict
         self.fcents = input_fcents
+        self.input_sideband = input_sideband
         self.tbin = input_tbin
         self.snr_threshold = snr_threshold
         self.nof_streams = nof_streams
@@ -459,10 +460,12 @@ class CalibrationGainCollector():
 
                 if manual_operation:
                     fcents_mhz = np.array([float(fcent) for fcent in self.fcents],dtype=float)
+                    sideband = np.array([float(sb) for sb in self.input_sideband],dtype=float)
                     tbin = float(self.tbin)
                 else:
                     fcents_mhz = np.array(self.meta_obs["fcents"],dtype=float)
                     tbin = self.meta_obs["tbin"]
+                    sideband = self.meta_obs["sideband"]
                     
                 channel_bw = 1/tbin
                 fcent_hz = fcents_mhz*1e6
@@ -472,14 +475,14 @@ class CalibrationGainCollector():
                     Observation meta reports:
                     `source = {self.source}`
                     `basebands = {self.basebands}`
-                    `sidebands = {self.meta_obs["sideband"]}`
+                    `sidebands = {sideband}`
                     `fcents = {fcents_mhz} MHz`
                     `tbin = {tbin}`""",
                     severity = "INFO", is_reply=True)
 
                 full_observation_channel_frequencies_hz = np.vstack((
-                    fcent_hz[0] + np.arange(-self.nof_channels//2, self.nof_channels//2) * channel_bw * self.meta_obs["sideband"][0],
-                    fcent_hz[1] + np.arange(-self.nof_channels//2, self.nof_channels//2) * channel_bw * self.meta_obs["sideband"][1]
+                    fcent_hz[0] + np.arange(-self.nof_channels//2, self.nof_channels//2) * channel_bw * sideband[0],
+                    fcent_hz[1] + np.arange(-self.nof_channels//2, self.nof_channels//2) * channel_bw * sideband[1]
                 ))
 
                 full_gains_map, frequency_indices = self.correctly_place_residual_phases_and_delays(
@@ -819,6 +822,7 @@ if __name__ == "__main__":
     parser.add_argument("--no-slack-post", action="store_true",help="""If specified, logs are not posted to slack.""")
     parser.add_argument("--fcentmhz", nargs="*", default=[1000, 1001], help="""fcent values separated by space for observation""")
     parser.add_argument("--tbin", type=float, default=1e-6, required=False, help="""tbin value for observation in seconds""")
+    parser.add_argument("--sideband", nargs="*", default=[1, 1], help="sideband values separated by space for observation")
     parser.add_argument("--snr-threshold", type=float, default = 4.0, required=False, 
                         help="""The snr threshold above which the process will reject applying the calculated delay
                         and phase residual calibration values""")
@@ -863,5 +867,5 @@ if __name__ == "__main__":
     calibrationGainCollector = CalibrationGainCollector(redis_obj, fetch_config = args.run_as_service, user_output_dir = output_dir, hash_timeout = args.hash_timeout, dry_run = args.dry_run,
                                 re_arm_time = args.re_arm_time, fit_method = args.fit_method, slackbot = slackbot, input_fixed_delays = input_fixed_delays,
                                 input_fixed_phases = input_fixed_phases, input_json_dict = None if not bool(input_json_dict) else input_json_dict,
-                                input_fcents = args.fcentmhz, input_tbin = args.tbin, snr_threshold = args.snr_threshold)
+                                input_fcents = args.fcentmhz, input_sideband = args.sideband, input_tbin = args.tbin, snr_threshold = args.snr_threshold)
     calibrationGainCollector.start()
