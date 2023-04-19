@@ -192,24 +192,26 @@ class CalibrationGainCollector():
                                             is_reply = True)
                 return False
             
-        if time.time() >= self.scan_end and self.scan_is_ending:
-            self.log_and_post_slackmessage(f"""
-            Scan has ended at {time.ctime(self.scan_end)}, fixed delay and fixed phase values are being reset to
-            `{self.input_fixed_delays}`
-            and
-            `{self.input_fixed_phases}`
-            respectively.""", severity="INFO", is_reply = True)
-            load_delay_calibrations(self.input_fixed_delays)
-            load_phase_calibrations(self.input_fixed_phases)
-            self.scan_is_ending=False 
-
         self.log_and_post_slackmessage("Calibration process is armed and awaiting triggers from GPU nodes.",
                                        severity="INFO", is_reply = False)
 
         #Fetch message from subscribed channels
         while True:
+
+            if time.time() >= self.scan_end and self.scan_is_ending:
+                self.log_and_post_slackmessage(f"""
+                Scan has ended at {time.ctime(self.scan_end)}, fixed delay and fixed phase values are being reset to
+                `{self.input_fixed_delays}`
+                and
+                `{self.input_fixed_phases}`
+                respectively.""", severity="INFO", is_reply = True)
+                load_delay_calibrations(self.input_fixed_delays)
+                load_phase_calibrations(self.input_fixed_phases)
+                self.scan_is_ending=False
+
             redis_publish_service_pulse(self.redis_obj, SERVICE_NAME)
             message = pubsub.get_message()
+            
             if message is not None and isinstance(message, dict):
                 logger.info(f"Awaiting Trigger, received message on {message['channel']}")
                 msg = json.loads(message.get('data'))
