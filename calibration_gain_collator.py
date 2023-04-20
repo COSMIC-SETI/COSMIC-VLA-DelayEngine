@@ -835,10 +835,9 @@ if __name__ == "__main__":
     if len(args.file) != 0:
         for f in args.file:
             input_json_dict.update(json.load(f))
-        args.no_slack_post = True
         args.dry_run = True
         manual_run = True
-
+    
     slackbot = None
     if not args.no_slack_post:
         if "SLACK_BOT_TOKEN" in os.environ:

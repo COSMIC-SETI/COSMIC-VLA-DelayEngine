@@ -99,6 +99,7 @@ def calc_residuals_from_polyfit(ant_to_gains, observation_frequencies, current_p
 
         for ant, phase_matrix in current_phase_cals.items():
             phase_matrix = np.array(phase_matrix,dtype=float)
+            nof_streams = phase_matrix.shape[0]
             if ant in ant_to_gains.keys():
 
                 gain_matrix = np.array(ant_to_gains[ant], dtype = np.complex64)
@@ -106,7 +107,6 @@ def calc_residuals_from_polyfit(ant_to_gains, observation_frequencies, current_p
                 current_phase_matrix = np.exp(1j * np.array(phase_matrix))
                 new_gain_matrix = gain_matrix * current_phase_matrix
 
-                nof_streams = int(gain_matrix.shape[0])
                 nof_tunings = int(observation_frequencies.shape[0])
                 nof_pols = int(nof_streams/nof_tunings)
                 residual_delays = np.zeros(nof_streams,dtype=np.float64)
@@ -178,6 +178,7 @@ def calc_residuals_from_ifft(ant_to_gains, observation_frequencies, current_phas
 
     for ant, phase_matrix in current_phase_cals.items():
         phase_matrix = np.array(phase_matrix,dtype=float)
+        nof_streams = phase_matrix.shape[0]
         if ant in ant_to_gains.keys():
             gain_matrix = np.array(ant_to_gains[ant], dtype = np.complex64)
 
@@ -185,7 +186,6 @@ def calc_residuals_from_ifft(ant_to_gains, observation_frequencies, current_phas
             current_phase_matrix = np.exp(1j * np.array(phase_matrix))
             new_gain_matrix = gain_matrix * current_phase_matrix
 
-            nof_streams = gain_matrix.shape[0]
             nof_tunings,nof_chan = observation_frequencies.shape
             nof_pols = int(nof_streams/nof_tunings)
             ifft_abs_matrix = np.abs(np.fft.ifft(new_gain_matrix, axis = 1))
