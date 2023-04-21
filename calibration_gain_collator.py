@@ -194,71 +194,73 @@ class CalibrationGainCollector():
             
         self.log_and_post_slackmessage("Calibration process is armed and awaiting triggers from GPU nodes.",
                                        severity="INFO", is_reply = False)
-    
         while True:
-            #Check if it is time to reset the calibration values:
-            if time.time() >= self.scan_end and self.scan_is_ending:
-                self.log_and_post_slackmessage(f"""
-                Scan has ended at {time.ctime(self.scan_end)}, fixed delay and fixed phase values are being reset to
-                `{self.input_fixed_delays}`
-                and
-                `{self.input_fixed_phases}`
-                respectively.""", severity="INFO", is_reply = True)
-                load_delay_calibrations(self.input_fixed_delays)
-                load_phase_calibrations(self.input_fixed_phases)
-                self.scan_is_ending=False
-
-            #Fetch all messages
-            message = pubsub.get_message()
-            if message is not None and isinstance(message, dict):
-                #We have messages
-                if message['channel'] in CHANNEL_ORDER:
-                    CHANNEL_MESSAGES[message['channel']].append(json.loads(message.get('data')))
-            else:
-                if all(len(v) == 0 for v in CHANNEL_MESSAGES.values()):
-                    continue
-                else:
-                    #We've gotten some messages, no more messages left to fetch
-                    break
-        
-        #Now process any of the messages received
-        for channel in CHANNEL_ORDER:
-            while len(CHANNEL_MESSAGES[channel])!=0:
-                #If the channel has a message i.e. list is not empty
-                message_data = CHANNEL_MESSAGES[channel].pop(0)
-                #Process message:
-                if channel == OBSERVATIONS_CHANNEL:
-                    if "uvh5_calibrate" in message_data['postprocess']["#STAGES"]:
-                        self.log_and_post_slackmessage(f"""
-                        Received message indicating calibration observation is starting.
-                        Collected mcast metadata now...""", severity = "INFO", is_reply = True)
-                        self.projid = message_data['project_id']
-                        self.dataset = message_data['dataset_id']
-                        self.meta_obs = redis_hget_keyvalues(self.redis_obj, "META")
-                    if "MoveARG" in message_data['postprocess']:
-                        self.user_output_dir = (message_data['postprocess']["MoveARG"]).split('$',1)[0]
-                        self.log_and_post_slackmessage(f"""
-                        Upcoming observation is saving UVH5 files to:
-                        `{self.user_output_dir}`
-                        Calibration solutions and results will be saved to 
-                        the same directory in folder `calibration`.
-                        """, severity = "INFO", is_reply = True)
-                        continue
-                        
-                if channel == SCAN_END_CHANNEL:
-                    self.scan_end = message_data["stop_time_unix"]
-                    self.scan_is_ending=True
+            while True:
+                #Check if it is time to reset the calibration values:
+                if time.time() >= self.scan_end and self.scan_is_ending:
                     self.log_and_post_slackmessage(f"""
-                    Calibration process has been notified that current scan with datasetID =
-                    `{message_data['dataset_id']}`
-                    is ending at {time.ctime(self.scan_end)}""", severity="INFO", is_reply=True)
-                    continue
+                    Scan has ended at {time.ctime(self.scan_end)}, fixed delay and fixed phase values are being reset to
+                    `{self.input_fixed_delays}`
+                    and
+                    `{self.input_fixed_phases}`
+                    respectively.""", severity="INFO", is_reply = True)
+                    load_delay_calibrations(self.input_fixed_delays)
+                    load_phase_calibrations(self.input_fixed_phases)
+                    self.scan_is_ending=False
 
-                if channel == GPU_GAINS_REDIS_CHANNEL:
-                    if message_data is not None:
-                        return message_data
+                #Fetch all messages
+                message = pubsub.get_message()
+                if message:
+                    #We have messages
+                    if message['channel'] in CHANNEL_ORDER:
+                        CHANNEL_MESSAGES[message['channel']].append(json.loads(message.get('data')))
+                else:
+                    if all(len(v) == 0 for v in CHANNEL_MESSAGES.values()):
+                        continue
                     else:
-                        continue                
+                        #We've gotten some messages and no more messages left to fetch
+                        break
+            
+            #Now process any of the messages received
+            for channel in CHANNEL_ORDER:
+                while len(CHANNEL_MESSAGES[channel])!=0:
+                    #If the channel has a message i.e. list is not empty
+                    message_data = CHANNEL_MESSAGES[channel].pop(0)
+                    #Process message:
+                    if channel == OBSERVATIONS_CHANNEL:
+                        if "uvh5_calibrate" in message_data['postprocess']["#STAGES"]:
+                            self.log_and_post_slackmessage(f"""
+                            Received message indicating calibration observation is starting.
+                            Collected mcast metadata now...""", severity = "INFO", is_reply = True)
+                            self.projid = message_data['project_id']
+                            self.dataset = message_data['dataset_id']
+                            self.meta_obs = redis_hget_keyvalues(self.redis_obj, "META")
+                        if "MoveARG" in message_data['postprocess']:
+                            self.user_output_dir = (message_data['postprocess']["MoveARG"]).split('$',1)[0]
+                            self.log_and_post_slackmessage(f"""
+                            Upcoming observation is saving UVH5 files to:
+                            `{self.user_output_dir}`
+                            Calibration solutions and results will be saved to 
+                            the same directory in folder `calibration`.
+                            """, severity = "INFO", is_reply = True)
+                            continue
+                            
+                    if channel == SCAN_END_CHANNEL:
+                        self.scan_end = message_data["stop_time_unix"]
+                        self.scan_is_ending=True
+                        self.log_and_post_slackmessage(f"""
+                        Calibration process has been notified that current scan with datasetID =
+                        `{message_data['dataset_id']}`
+                        is ending at {time.ctime(self.scan_end)}""", severity="INFO", is_reply=True)
+                        continue
+
+                    if channel == GPU_GAINS_REDIS_CHANNEL:
+                        if message_data is not None:
+                            self.log_and_post_slackmessage(f"""
+                            GPU Gains message {message_data} received.""", severity="DEBUG")
+                            return message_data
+                        else:
+                            continue                
 
     def collect_phases_for_hash_timeout(self, time_to_wait_until, manual_operation):
         """
