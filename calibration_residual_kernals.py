@@ -140,7 +140,7 @@ def calc_residuals_from_polyfit(ant_to_gains, observation_frequencies, current_p
 
         return delay_residual_map, phase_cal_map
 
-def calc_residuals_from_ifft(ant_to_gains, observation_frequencies, current_phase_cals, frequency_indices, snr_threshold=4.0):
+def calc_residuals_from_ifft(ant_to_gains, observation_frequencies, current_phase_cals, frequency_indices, sideband, snr_threshold=4.0):
     """
     Accept mapping of antenna to gains.
     Returns ant to residual delay and ant to phase cal maps.
@@ -153,6 +153,7 @@ def calc_residuals_from_ifft(ant_to_gains, observation_frequencies, current_phas
                     {<ant> : [[phase_cal_pol0_tune0], [phase_cal_pol1_tune0], [phase_cal_pol0_tune1], [phase_cal_pol1_tune1]], ...}
         frequency_indices : indices of the collected gains (sorted) in the full n_chans per tuning: 
                             {tuning_idx : np.array(int)}
+        sideband           : A list of integers dictating sideband orientation for the two tunings
         snr_threshold float : the snr threshold of delay delta to noise above which a calibration run will be deemed suitable for updates to fixed delays/phases to be
                         applied.
 
@@ -217,7 +218,7 @@ def calc_residuals_from_ifft(ant_to_gains, observation_frequencies, current_phas
                     residual_delay = -1.0 * tlags[max_idxs[stream_idx]]
                     #Now rather than using the abs(residual_delay) value, use
                     if snr[stream_idx] > snr_threshold:
-                        residual_delays[stream_idx] = residual_delay
+                        residual_delays[stream_idx] = sideband[tune] * residual_delay
                         gain_from_residual_delay = np.exp(2j*np.pi*(observation_frequencies[tune,:]*1e-9)*residual_delays[stream_idx])
                         phase_cals[stream_idx] = np.angle(new_gain_matrix[stream_idx,:]/gain_from_residual_delay)
                         #zero all phases outside the collected gains range
