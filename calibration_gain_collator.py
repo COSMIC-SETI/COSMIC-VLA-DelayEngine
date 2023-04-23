@@ -64,7 +64,7 @@ class CalibrationGainCollector():
         self.input_fixed_phases = input_fixed_phases
         self.input_json_dict = input_json_dict
         self.fcents = input_fcents
-        self.sideband = input_sideband
+        self.input_sideband = input_sideband
         self.tbin = input_tbin
         self.snr_threshold = snr_threshold
         self.nof_streams = nof_streams
@@ -199,24 +199,26 @@ class CalibrationGainCollector():
                                             is_reply = True)
                 return False
             
-        if time.time() >= self.scan_end and self.scan_is_ending:
-            self.log_and_post_slackmessage(f"""
-            Scan has ended at {time.ctime(self.scan_end)}, fixed delay and fixed phase values are being reset to
-            `{self.input_fixed_delays}`
-            and
-            `{self.input_fixed_phases}`
-            respectively.""", severity="INFO", is_reply = True)
-            load_delay_calibrations(self.input_fixed_delays)
-            load_phase_calibrations(self.input_fixed_phases)
-            self.scan_is_ending=False 
-
         self.log_and_post_slackmessage("Calibration process is armed and awaiting triggers from GPU nodes.",
                                        severity="INFO", is_reply = False)
 
         #Fetch message from subscribed channels
         while True:
+
+            if time.time() >= self.scan_end and self.scan_is_ending:
+                self.log_and_post_slackmessage(f"""
+                Scan has ended at {time.ctime(self.scan_end)}, fixed delay and fixed phase values are being reset to
+                `{self.input_fixed_delays}`
+                and
+                `{self.input_fixed_phases}`
+                respectively.""", severity="INFO", is_reply = True)
+                load_delay_calibrations(self.input_fixed_delays)
+                load_phase_calibrations(self.input_fixed_phases)
+                self.scan_is_ending=False
+
             redis_publish_service_pulse(self.redis_obj, SERVICE_NAME)
             message = pubsub.get_message()
+            
             if message is not None and isinstance(message, dict):
                 logger.info(f"Awaiting Trigger, received message on {message['channel']}")
                 msg = json.loads(message.get('data'))
@@ -322,6 +324,10 @@ class CalibrationGainCollector():
     def correctly_place_residual_phases_and_delays(self, ant_tune_to_collected_gain, 
         collected_frequencies, full_observation_channel_frequencies):
         """
+        First, `collected_frequencies` need to be ordered as they are not ordered when collected. Their ordering
+        will be the same as what is needed for the gains (since they are taken 1 to 1).
+        After ordering the `collected_frequencies` -> either ascending or descending, the indices of their placement
+        inside of the `full_observation_channel_frequencies_hz` must be calculated. 
         By investigating the placement of `collected_frequencies` inside of `full_observation_channel_frequencies_hz`,
         a map of how to place the collected gains inside an array of `self.nof_channels` per stream per antenna
         may be generated.
@@ -343,15 +349,27 @@ class CalibrationGainCollector():
         #frequencies in the full nof_chan frequencies.
         for tuning, collected_freq in collected_frequencies.items():
             collected_freq = np.array(collected_freq,dtype=float)
-            #find sorting
-            sortings[tuning] = np.argsort(collected_freq)
-            #sort frequencies
-            collected_frequencies[tuning] = collected_freq[sortings[tuning]]
-            #find sorted frequency indices
-            obs_frequencies_ascending = full_observation_channel_frequencies[tuning,0] < full_observation_channel_frequencies[tuning,-1]
-            obs_nof_frequencies = len(full_observation_channel_frequencies[tuning,:])
-            sorter = np.arange(obs_nof_frequencies) if obs_frequencies_ascending else np.arange(obs_nof_frequencies, 0, -1)-1
-            frequency_indices[tuning] = full_observation_channel_frequencies[tuning,:].searchsorted(collected_frequencies[tuning], sorter=sorter)
+            #Get the indices that would sort the frequencies into ascending order.
+            sort_indices = np.argsort(collected_freq)
+            #Find out in which direction the frequencies run
+            obs_frequencies_ascending = np.all(np.diff(full_observation_channel_frequencies[tuning,:]) > 0)
+            if not obs_frequencies_ascending:
+                sort_indices = sort_indices[::-1]
+            #sort frequencies - either into ascending or descending order
+            collected_frequencies[tuning] = np.round(collected_freq[sort_indices],decimals=2)
+            #find sorted frequency indices inside of overall observation frequencies
+            frequency_indices[tuning] = (np.searchsorted(full_observation_channel_frequencies[tuning,:],collected_frequencies[tuning])
+                                        if obs_frequencies_ascending
+                                        else
+                                        full_observation_channel_frequencies[tuning,:].size-1-np.searchsorted(full_observation_channel_frequencies[tuning,::-1],collected_frequencies[tuning]))
+
+            if not np.all(np.isclose(full_observation_channel_frequencies[tuning,frequency_indices[tuning]], collected_frequencies[tuning], atol=1e-2)):
+                self.log_and_post_slackmessage(f"""
+                Not all collected frequencies match those in the expected observation frequencies. As such gain reordering may not be correct.
+                Continuing""", severity="WARNING", is_reply=True)
+
+            #store the sortings for sorting the gains later
+            sortings[tuning] = sort_indices
         
             #check that ordering was successful:
             frequency_match = np.equal(collected_frequencies[tuning], full_observation_channel_frequencies[tuning,frequency_indices[tuning]])
@@ -486,12 +504,12 @@ class CalibrationGainCollector():
 
                     #extract fcents
                     fcents_mhz = np.array([float(fcent) for fcent in self.fcents],dtype=float)
-                    self.sideband = np.array([float(sb) for sb in self.sideband],dtype=float)
+                    sideband = np.array([float(sb) for sb in self.input_sideband],dtype=float)
                     tbin = float(self.tbin)
                 else:
                     fcents_mhz = np.array(self.meta_obs["fcents"],dtype=float)
                     tbin = self.meta_obs["tbin"]
-                    self.sideband = self.meta_obs["sideband"]
+                    sideband = self.meta_obs["sideband"]
                     
                 channel_bw = 1/tbin
                 fcent_hz = fcents_mhz*1e6
@@ -501,14 +519,14 @@ class CalibrationGainCollector():
                     Observation meta reports:
                     `source = {self.source}`
                     `basebands = {self.basebands}`
-                    `sidebands = {self.sideband}`
+                    `sidebands = {sideband}`
                     `fcents = {fcents_mhz} MHz`
                     `tbin = {tbin}`""",
                     severity = "INFO", is_reply=True)
 
                 full_observation_channel_frequencies_hz = np.vstack((
-                    fcent_hz[0] + np.arange(-self.nof_channels//2, self.nof_channels//2) * channel_bw,
-                    fcent_hz[1] + np.arange(-self.nof_channels//2, self.nof_channels//2) * channel_bw
+                    fcent_hz[0] + np.arange(-self.nof_channels//2, self.nof_channels//2) * channel_bw * sideband[0],
+                    fcent_hz[1] + np.arange(-self.nof_channels//2, self.nof_channels//2) * channel_bw * sideband[1]
                 ))
 
                 full_gains_map, frequency_indices = self.correctly_place_residual_phases_and_delays(
@@ -623,7 +641,8 @@ class CalibrationGainCollector():
                                                                                         last_fixed_phases, frequency_indices, snr_threshold = self.snr_threshold)
                     elif self.fit_method == "fourier":
                         delay_residual_map, phase_cal_map, snr_map, sigma_phase_map = calc_residuals_from_ifft(full_gains_map,full_observation_channel_frequencies_hz,
-                                                                                    last_fixed_phases, frequency_indices, snr_threshold = self.snr_threshold, output_dir = output_dir)
+                                                                                    last_fixed_phases, frequency_indices, sideband, snr_threshold = self.snr_threshold,
+                                                                                    output_dir = output_dir)
                 except Exception as e:
                     self.log_and_post_slackmessage(f"""
                     Exception encountered making a call to the calibration kernel:
@@ -861,10 +880,9 @@ if __name__ == "__main__":
     if len(args.file) != 0:
         for f in args.file:
             input_json_dict.update(json.load(f))
-        args.no_slack_post = True
         args.dry_run = True
         manual_run = True
-
+    
     slackbot = None
     if not args.no_slack_post:
         if "SLACK_BOT_TOKEN" in os.environ:
