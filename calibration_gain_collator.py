@@ -356,10 +356,10 @@ class CalibrationGainCollector():
                                         else
                                         full_observation_channel_frequencies[tuning,:].size-1-np.searchsorted(full_observation_channel_frequencies[tuning,::-1],collected_frequencies[tuning]))
 
-            if not np.all(np.isclose(full_observation_channel_frequencies[tuning,frequency_indices[tuning]], collected_frequencies[tuning], atol=1e-2)):
-                self.log_and_post_slackmessage(f"""
-                Not all collected frequencies match those in the expected observation frequencies. As such gain reordering may not be correct.
-                Continuing""", severity="WARNING", is_reply=True)
+            # if not np.all(np.isclose(full_observation_channel_frequencies[tuning,frequency_indices[tuning]], collected_frequencies[tuning], atol=1e-2)):
+            #     self.log_and_post_slackmessage(f"""
+            #     Not all collected frequencies match those in the expected observation frequencies. As such gain reordering may not be correct.
+            #     Continuing""", severity="WARNING", is_reply=True)
 
             #store the sortings for sorting the gains later
             sortings[tuning] = sort_indices
@@ -498,10 +498,10 @@ class CalibrationGainCollector():
                     `tbin = {tbin}`""",
                     severity = "INFO", is_reply=True)
 
-                full_observation_channel_frequencies_hz = np.vstack((
+                full_observation_channel_frequencies_hz = np.round(np.vstack((
                     fcent_hz[0] + np.arange(-self.nof_channels//2, self.nof_channels//2) * channel_bw * sideband[0],
                     fcent_hz[1] + np.arange(-self.nof_channels//2, self.nof_channels//2) * channel_bw * sideband[1]
-                ))
+                )),decimals=2)
 
                 full_gains_map, frequency_indices = self.correctly_place_residual_phases_and_delays(
                     ant_tune_to_collected_gains, collected_frequencies, 
