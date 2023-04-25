@@ -45,8 +45,16 @@ CONFIG_HASH = "CAL_configuration"
 
 GPU_PHASES_REDIS_HASH = "GPU_calibrationPhases"
 GPU_GAINS_REDIS_HASH = "GPU_calibrationGains"
-GPU_PHASES_REDIS_CHANNEL = "gpu_calibrationphases"
+
 GPU_GAINS_REDIS_CHANNEL = "gpu_calibrationgains"
+SCAN_END_CHANNEL = "scan_dataset_finish"
+OBSERVATIONS_CHANNEL = "observations"
+
+CHANNEL_ORDER=[OBSERVATIONS_CHANNEL, SCAN_END_CHANNEL, GPU_GAINS_REDIS_CHANNEL]
+
+CHANNEL_MESSAGES={OBSERVATIONS_CHANNEL:[],
+                  SCAN_END_CHANNEL:[],
+                  GPU_GAINS_REDIS_CHANNEL:[]}
 
 class CalibrationGainCollector():
     def __init__(self, redis_obj, fetch_config = False, user_output_dir='.', hash_timeout=20, re_arm_time = 30, fit_method = "fourier", dry_run = False,
@@ -176,15 +184,7 @@ class CalibrationGainCollector():
 
     def await_trigger(self):
         pubsub = self.redis_obj.pubsub(ignore_subscribe_messages=True)
-        try:
-            pubsub.subscribe(GPU_GAINS_REDIS_CHANNEL)
-        except redis.RedisError:
-            self.log_and_post_slackmessage(f"""
-                Unable to subscribe to {GPU_GAINS_REDIS_CHANNEL} 
-                channel to listen for changes to {GPU_GAINS_REDIS_HASH}.""",
-            severity="ERROR", is_reply = True)
-            return False
-        for channel in ["observations", "scan_dataset_finish"]:
+        for channel in CHANNEL_ORDER:
             try:
                 pubsub.subscribe(channel)
             except redis.RedisError:
@@ -194,59 +194,73 @@ class CalibrationGainCollector():
             
         self.log_and_post_slackmessage("Calibration process is armed and awaiting triggers from GPU nodes.",
                                        severity="INFO", is_reply = False)
-
-        #Fetch message from subscribed channels
         while True:
-
-            if time.time() >= self.scan_end and self.scan_is_ending:
-                self.log_and_post_slackmessage(f"""
-                Scan has ended at {time.ctime(self.scan_end)}, fixed delay and fixed phase values are being reset to
-                `{self.input_fixed_delays}`
-                and
-                `{self.input_fixed_phases}`
-                respectively.""", severity="INFO", is_reply = True)
-                load_delay_calibrations(self.input_fixed_delays)
-                load_phase_calibrations(self.input_fixed_phases)
-                self.scan_is_ending=False
-
-            redis_publish_service_pulse(self.redis_obj, SERVICE_NAME)
-            message = pubsub.get_message()
-            
-            if message is not None and isinstance(message, dict):
-                logger.info(f"Awaiting Trigger, received message on {message['channel']}")
-                msg = json.loads(message.get('data'))
-                if message['channel'] == "observations":
-                    if "uvh5_calibrate" in msg['postprocess']["#STAGES"]:
-                        self.log_and_post_slackmessage(f"""
-                        Received message indicating calibration observation is starting.
-                        Collected mcast metadata now...""", severity = "INFO", is_reply = True)
-                        self.projid = msg['project_id']
-                        self.dataset = msg['dataset_id']
-                        self.meta_obs = redis_hget_keyvalues(self.redis_obj, "META")
-                    if "MoveARG" in msg['postprocess']:
-                        self.user_output_dir = (msg['postprocess']["MoveARG"]).split('$',1)[0]
-                        self.log_and_post_slackmessage(f"""
-                        Upcoming observation is saving UVH5 files to:
-                        `{self.user_output_dir}`
-                        Calibration solutions and results will be saved to 
-                        the same directory in folder `calibration`.
-                        """, severity = "INFO", is_reply = True)
-                        continue
-                        
-                if message['channel'] == "scan_dataset_finish":
-                    self.scan_end = redis_hget_keyvalues(self.redis_obj, "META", keys=["tend_unix"])["tend_unix"]
-                    self.scan_is_ending=True
+            while True:
+                #Check if it is time to reset the calibration values:
+                if time.time() >= self.scan_end and self.scan_is_ending:
                     self.log_and_post_slackmessage(f"""
-                    Calibration process has been notified that current scan with datasetID =
-                    `{msg}`
-                    is ending at {time.ctime(self.scan_end)}""", severity="INFO", is_reply=True)
-                    continue
+                    Scan has ended at {time.ctime(self.scan_end)}, fixed delay and fixed phase values are being reset to
+                    `{self.input_fixed_delays}`
+                    and
+                    `{self.input_fixed_phases}`
+                    respectively.""", severity="INFO", is_reply = True)
+                    load_delay_calibrations(self.input_fixed_delays)
+                    load_phase_calibrations(self.input_fixed_phases)
+                    self.scan_is_ending=False
 
-                if message['channel'] == GPU_GAINS_REDIS_CHANNEL:
-                    if msg is not None:
-                        return msg
-                    else:
+                #Fetch all messages
+                message = pubsub.get_message()
+                if message:
+                    #We have messages
+                    if message['channel'] in CHANNEL_ORDER:
+                        CHANNEL_MESSAGES[message['channel']].append(json.loads(message.get('data')))
+                else:
+                    if all(len(v) == 0 for v in CHANNEL_MESSAGES.values()):
                         continue
+                    else:
+                        #We've gotten some messages and no more messages left to fetch
+                        break
+            
+            #Now process any of the messages received
+            for channel in CHANNEL_ORDER:
+                while len(CHANNEL_MESSAGES[channel])!=0:
+                    #If the channel has a message i.e. list is not empty
+                    message_data = CHANNEL_MESSAGES[channel].pop(0)
+                    #Process message:
+                    if channel == OBSERVATIONS_CHANNEL:
+                        if "uvh5_calibrate" in message_data['postprocess']["#STAGES"]:
+                            self.log_and_post_slackmessage(f"""
+                            Received message indicating calibration observation is starting.
+                            Collected mcast metadata now...""", severity = "INFO", is_reply = True)
+                            self.projid = message_data['project_id']
+                            self.dataset = message_data['dataset_id']
+                            self.meta_obs = redis_hget_keyvalues(self.redis_obj, "META")
+                        if "MoveARG" in message_data['postprocess']:
+                            self.user_output_dir = (message_data['postprocess']["MoveARG"]).split('$',1)[0]
+                            self.log_and_post_slackmessage(f"""
+                            Upcoming observation is saving UVH5 files to:
+                            `{self.user_output_dir}`
+                            Calibration solutions and results will be saved to 
+                            the same directory in folder `calibration`.
+                            """, severity = "INFO", is_reply = True)
+                            continue
+                            
+                    if channel == SCAN_END_CHANNEL:
+                        self.scan_end = message_data["stop_time_unix"]
+                        self.scan_is_ending=True
+                        self.log_and_post_slackmessage(f"""
+                        Calibration process has been notified that current scan with datasetID =
+                        `{message_data['dataset_id']}`
+                        is ending at {time.ctime(self.scan_end)}""", severity="INFO", is_reply=True)
+                        continue
+
+                    if channel == GPU_GAINS_REDIS_CHANNEL:
+                        if message_data is not None:
+                            self.log_and_post_slackmessage(f"""
+                            GPU Gains message {message_data} received.""", severity="DEBUG")
+                            return message_data
+                        else:
+                            continue                
 
     def collect_phases_for_hash_timeout(self, time_to_wait_until, manual_operation):
         """
