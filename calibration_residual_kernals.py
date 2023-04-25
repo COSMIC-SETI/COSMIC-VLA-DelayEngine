@@ -203,9 +203,11 @@ def calc_residuals_from_ifft(ant_to_gains, observation_frequencies, current_phas
             sigma_phase = np.zeros(nof_streams, dtype=np.float64)
             
             for tune in range(nof_tunings):
+                # deal with sideband by negating frequencies
+                obsfreqs = sideband[tune]*observation_frequencies[tune,:]
                 #find range outside collected gains
-                uncollected_gain_range = np.setdiff1d(np.arange(observation_frequencies[tune,:].size), frequency_indices[tune], assume_unique = True)
-                chan_width = observation_frequencies[tune,1] - observation_frequencies[tune,0]
+                uncollected_gain_range = np.setdiff1d(np.arange(obsfreqs.size), frequency_indices[tune], assume_unique = True)
+                chan_width = obsfreqs[1] - obsfreqs[0]
                 freqs = np.fft.fftfreq(nof_chan, chan_width)
                 tlags = freqs*1e9
                 for pol in range(nof_pols):   #probably unecessary - could do with some matrix mult stuff
@@ -218,8 +220,8 @@ def calc_residuals_from_ifft(ant_to_gains, observation_frequencies, current_phas
                     residual_delay = -1.0 * tlags[max_idxs[stream_idx]]
                     #Now rather than using the abs(residual_delay) value, use
                     if snr[stream_idx] > snr_threshold:
-                        residual_delays[stream_idx] = sideband[tune] * residual_delay
-                        gain_from_residual_delay = np.exp(2j*np.pi*(observation_frequencies[tune,:]*1e-9)*residual_delays[stream_idx])
+                        residual_delays[stream_idx] = residual_delay
+                        gain_from_residual_delay = np.exp(2j*np.pi*(obsfreqs*1e-9)*residual_delays[stream_idx])
                         phase_cals[stream_idx] = np.angle(new_gain_matrix[stream_idx,:]/gain_from_residual_delay)
                         #zero all phases outside the collected gains range
                         phase_cals[stream_idx, uncollected_gain_range] = 0.0
