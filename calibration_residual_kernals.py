@@ -191,11 +191,11 @@ def calc_residuals_from_ifft(ant_to_gains, observation_frequencies, current_phas
             nof_pols = int(nof_streams/nof_tunings)
             ifft_abs_matrix = np.abs(np.fft.ifft(new_gain_matrix, axis = 1))
             max_idxs = np.argmax(ifft_abs_matrix,axis=1)
-            
+            ifft_abs_matrix_dB = 10*np.log10(ifft_abs_matrix)
         
             #Adding some lines to do the SNR of the peak here
-            ant_sigma = mad(ifft_abs_matrix,  axis=1)
-            ant_median = np.median(ifft_abs_matrix, axis=1)
+            ant_sigma = mad(ifft_abs_matrix_dB,  axis=1)
+            ant_median = np.median(ifft_abs_matrix_dB, axis=1)
 
             residual_delays = np.zeros(nof_streams, dtype=np.float64)
             phase_cals = np.zeros(gain_matrix.shape, dtype=np.float64)
@@ -214,8 +214,8 @@ def calc_residuals_from_ifft(ant_to_gains, observation_frequencies, current_phas
                     #some binary logic
                     stream_idx = int(str(tune)+str(pol),2)
                     
-                    #Calculating the power here and SNR
-                    snr[stream_idx] = (ifft_abs_matrix[stream_idx, max_idxs[stream_idx]] - ant_median[stream_idx])/ant_sigma[stream_idx]
+                    #Calculating the SNR in dB
+                    snr[stream_idx] = (ifft_abs_matrix_dB[stream_idx, max_idxs[stream_idx]] - ant_median[stream_idx])/ant_sigma[stream_idx]
 
                     residual_delay = -1.0 * tlags[max_idxs[stream_idx]]
                     #Now rather than using the abs(residual_delay) value, use
