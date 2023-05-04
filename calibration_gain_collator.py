@@ -16,7 +16,7 @@ from calibration_residual_kernals import calc_residuals_from_polyfit, calc_resid
 from cosmic.observations.slackbot import SlackBot
 from cosmic.fengines import ant_remotefeng_map
 from cosmic.redis_actions import redis_obj, redis_hget_keyvalues, redis_publish_dict_to_hash, redis_clear_hash_contents, redis_publish_service_pulse, redis_publish_dict_to_channel
-from plot_delay_phase import plot_delay_phase, plot_gain_phase, plot_snr_and_phase_spread, plot_gain_grade
+from plot_delay_phase import plot_delay_phase, plot_gain_phase, plot_gain_amplitude, plot_snr_and_phase_spread, plot_gain_grade
 
 LOGFILENAME = "/home/cosmic/logs/DelayCalibration.log"
 logger = logging.getLogger('calibration_delays')
@@ -549,11 +549,14 @@ class CalibrationGainCollector():
                     
                 #-------------------------PLOT PHASE OF COLLECTED GAINS-------------------------#
                 self.log_and_post_slackmessage("""
-                Plotting phase of the collected recorded gains...
+                Plotting phase and amplitude of the collected recorded gains...
                 """,severity="DEBUG")
 
                 phase_file_path_ac, phase_file_path_bd = plot_gain_phase(full_gains_map, full_observation_channel_frequencies_hz, frequency_indices, 
                                                                         fit_method = self.fit_method,
+                                                                        outdir = os.path.join(output_dir, "calibration_plots"), outfilestem=obs_id,
+                                                                        source_name = self.source)
+                amplitude_file_path_ac, amplitude_file_path_bd = plot_gain_amplitude(full_gains_map, full_observation_channel_frequencies_hz, frequency_indices,
                                                                         outdir = os.path.join(output_dir, "calibration_plots"), outfilestem=obs_id,
                                                                         source_name = self.source)
 
@@ -563,12 +566,22 @@ class CalibrationGainCollector():
                         and BD to:
                         `{phase_file_path_bd}`
                         """, severity = "DEBUG")
+                self.log_and_post_slackmessage(f"""
+                        Saved recorded gain amplitude for tuning AC to: 
+                        `{amplitude_file_path_ac}`
+                        and BD to:
+                        `{amplitude_file_path_bd}`
+                        """, severity = "DEBUG")
                 
                 if self.slackbot is not None:
                     try:
                         self.slackbot.upload_file(phase_file_path_ac, title =f"Recorded phases (degrees) for tuning AC from\n`{obs_id}`",
                                                 thread_ts = self.slack_message_ts)
                         self.slackbot.upload_file(phase_file_path_bd, title =f"Recorded phases (degrees) for tuning BD from\n`{obs_id}`",
+                                                thread_ts = self.slack_message_ts)
+                        self.slackbot.upload_file(amplitude_file_path_ac, title =f"Recorded amplitude for tuning AC from\n`{obs_id}`",
+                                                thread_ts = self.slack_message_ts)
+                        self.slackbot.upload_file(amplitude_file_path_bd, title =f"Recorded amplitude for tuning BD from\n`{obs_id}`",
                                                 thread_ts = self.slack_message_ts)
                     except:
                         self.log_and_post_slackmessage("Error uploading plots", severity="WARNING", is_reply=True)
@@ -586,12 +599,6 @@ class CalibrationGainCollector():
                         Cleaning up and aborting calibration process...
                     """, severity = "ERROR", is_reply= True)
                     return
-                
-                self.log_and_post_slackmessage(f"""
-                Subtracting fixed phases found in
-                ```{fixed_phase_filepath}```
-                from the received gain matrix
-                """, severity = "INFO", is_reply=True)
 
                 ant_to_grade = calc_calibration_ant_grade(full_gains_map)
                 freq_to_grade = calc_calibration_freq_grade(full_gains_map)

@@ -273,6 +273,126 @@ def plot_gain_phase(ant_to_gains, observation_frequencies, frequency_indices, fi
 
     return phase_file_path_ac, phase_file_path_bd
 
+def plot_gain_amplitude(ant_to_gains, observation_frequencies, frequency_indices, outdir=None, outfilestem=None, source_name=None):
+    """
+    Plot the amplitude of the received complex gain values per antenna.
+
+    Args:
+        ant_to_gains : {<ant> : [[complex(gains_pol0_tune0)], [complex(gains_pol1_tune0)], [complex(gains_pol0_tune1)], [complex(gains_pol1_tune1)]], ...}
+        observation_frequencies : list of dimension (n_tunings, nchans) in Hz
+        frequency_indices : frequency indices that decide which parts of the plot to make color
+        outdir : str directory path to save the plots to
+        outfilestem : str filename stem to use
+        source_name : str name of source to use in plot title
+    Returns:
+        amplitude_file_path_ac : str filepath to the amplitude vs freq plot for ac tuning
+        amplitude_file_path_bd : str filepath to the amplitude vs freq plot for bd tuning
+    """
+    if outdir is not None and not os.path.exists(outdir):
+        os.makedirs(outdir)
+
+    #Getting the antenna info from the keys
+    antennas = list(ant_to_gains.keys())
+
+    #plotting the phases vs antennas
+    #make a grid plot of phase vs freq for all antennas
+    grid_x = 6
+    grid_y = 5
+    fig, axs = plt.subplots(grid_x, grid_y, sharex  = True, sharey = True, constrained_layout=True, figsize = (12,14))
+
+    #Tuning 0
+    uncollected_gains = np.delete(np.arange(observation_frequencies[0,:].size), frequency_indices[0])
+    for i in range(grid_x):
+        for j in range(grid_y):
+            ant_ind = (i*grid_y)+j
+            if ant_ind < len(antennas):
+                amp_pol0 = np.abs(ant_to_gains[antennas[ant_ind]][0])
+                amp_pol1 = np.abs(ant_to_gains[antennas[ant_ind]][1])
+                axs[i,j].plot(
+                    observation_frequencies[0,frequency_indices[0]], amp_pol0[frequency_indices[0]],
+                      '.',  label = "AC0"
+                    )
+                axs[i,j].plot(
+                    observation_frequencies[0,uncollected_gains], amp_pol0[uncollected_gains],
+                      '.', color='grey'
+                      )
+                axs[i,j].plot(
+                    observation_frequencies[0,frequency_indices[0]], amp_pol1[frequency_indices[0]],
+                      '.',  label = "AC1"
+                      )
+                axs[i,j].plot(
+                    observation_frequencies[0,uncollected_gains], amp_pol1[uncollected_gains],
+                      '.', color='grey'
+                      )
+                axs[i,j].set_title(f"{antennas[ant_ind]}_AC")
+                axs[i,j].legend(loc = 'upper right')
+
+    fig.suptitle(f"Recorded Amplitude vs Freq from\n {outfilestem}\nfor source {source_name} and  tuning AC")
+    fig.supylabel("|Gains|")
+    fig.supxlabel("Frequency Channels")
+
+    if outfilestem is not None:
+        outfile_name = outfilestem+"recorded_amplitudeAC_vs_antennas.png"
+    else:
+        outfile_name = "recorded_amplitudeAC_vs_antennas.png"
+
+    if outdir is not None:
+        amplitude_file_path_ac = os.path.join(outdir, outfile_name)
+    else:
+        amplitude_file_path_ac = outfile_name
+         
+    plt.savefig(amplitude_file_path_ac, dpi = 150)
+    plt.close() 
+
+    fig, axs = plt.subplots(grid_x, grid_y, sharex  = True, sharey = True, constrained_layout=True, figsize = (12,14))
+
+    #Tuning 1
+    uncollected_gains = np.delete(np.arange(observation_frequencies[1,:].size), frequency_indices[1])
+    for i in range(grid_x):
+        for j in range(grid_y):
+            ant_ind = (i*grid_y)+j
+            if ant_ind < len(antennas):
+                amp_pol0 = np.abs(ant_to_gains[antennas[ant_ind]][2])
+                amp_pol1 = np.abs(ant_to_gains[antennas[ant_ind]][3])
+
+                axs[i,j].plot(
+                    observation_frequencies[1,frequency_indices[1]], amp_pol0[frequency_indices[1]],
+                      '.',  label = "BD0"
+                    )
+                axs[i,j].plot(
+                    observation_frequencies[1,uncollected_gains], amp_pol0[uncollected_gains],
+                      '.', color='grey'
+                      )
+                axs[i,j].plot(
+                    observation_frequencies[1,frequency_indices[1]], amp_pol1[frequency_indices[1]],
+                      '.',  label = "BD1"
+                      )
+                axs[i,j].plot(
+                    observation_frequencies[1,uncollected_gains], amp_pol1[uncollected_gains],
+                      '.', color='grey'
+                      )
+                axs[i,j].set_title(f"{antennas[ant_ind]}_BD")
+                axs[i,j].legend(loc = 'upper right')
+
+    fig.suptitle(f"Recorded Amplitude vs Freq from\n {outfilestem}\nfor source {source_name} and tuning BD")
+    fig.supylabel("|Gains|")
+    fig.supxlabel("Frequency Channels")
+
+    if outfilestem is not None:
+        outfile_name = outfilestem+"recorded_amplitudeBD_vs_antennas.png"
+    else:
+        outfile_name = "recorded_amplitudeBD_vs_antennas.png"
+
+    if outdir is not None:
+        amplitude_file_path_bd = os.path.join(outdir, outfile_name)
+    else:
+        amplitude_file_path_bd = outfile_name
+         
+    plt.savefig(amplitude_file_path_bd, dpi = 150)
+    plt.close() 
+
+    return amplitude_file_path_ac, amplitude_file_path_bd
+
 def plot_delay_phase(residual_delays_dict, phase_dict, frequency_matrix, outdir=None, outfilestem=None,
                     source_name=None):
     """
