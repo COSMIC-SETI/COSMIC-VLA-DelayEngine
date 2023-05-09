@@ -3,6 +3,9 @@ import numpy as np
 import itertools
 import argparse
 import os
+import sys
+import atexit
+import traceback
 import logging
 from logging.handlers import RotatingFileHandler
 import redis
@@ -878,6 +881,18 @@ if __name__ == "__main__":
             input_json_dict.update(json.load(f))
         args.dry_run = True
         manual_run = True
+
+    #Logs contain traceback exceptions
+    def exception_hook(*args):
+        logger.error("".join(traceback.format_exception(*args)))
+        print("".join(traceback.format_exception(*args)))
+    sys.excepthook = exception_hook
+
+    def _exit():
+        # this happens after exception_hook even in the event of an exception
+        logger.info("Exiting.")
+        print("Exiting.")
+    atexit.register(_exit)
     
     slackbot = None
     if not args.no_slack_post:
