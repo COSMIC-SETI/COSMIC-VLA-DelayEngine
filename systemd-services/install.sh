@@ -9,7 +9,9 @@ else
 	cp ./delaymodel.service /etc/systemd/system/
 	systemctl disable calibration_gain_collator.service
 	systemctl disable delaymodel.service
+	systemctl disable delaylogger.service
 	systemctl daemon-reload
 	systemctl enable calibration_gain_collator.service
 	systemctl enable delaymodel.service
+	systemctl enable delaylogger.service
 fi
