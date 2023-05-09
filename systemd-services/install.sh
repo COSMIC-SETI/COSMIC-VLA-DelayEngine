@@ -7,6 +7,7 @@ then
 else
 	cp ./calibration_gain_collator.service /etc/systemd/system/
 	cp ./delaymodel.service /etc/systemd/system/
+	cp ./delaylogger.service /etc/systemd/system/
 	systemctl disable calibration_gain_collator.service
 	systemctl disable delaymodel.service
 	systemctl disable delaylogger.service

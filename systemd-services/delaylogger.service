@@ -9,6 +9,6 @@ WantedBy=multi-user.target
 
 [Service]
 Type=simple
-ExecStart=/home/cosmic/anaconda3/envs/cosmic_vla/bin/python /home/cosmic/dev/COSMIC-VLA-DelayEngine/delay_logger.py -p 15
+ExecStart=/home/cosmic/anaconda3/envs/cosmic_vla/bin/python /home/cosmic/src/COSMIC-VLA-DelayEngine/delay_logger.py -p 15
 Restart=on-failure
 RestartSec=1
