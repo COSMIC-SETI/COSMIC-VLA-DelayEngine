@@ -371,10 +371,13 @@ class CalibrationGainCollector():
                                         else
                                         full_observation_channel_frequencies[tuning,:].size-1-np.searchsorted(full_observation_channel_frequencies[tuning,::-1],collected_frequencies[tuning]))
 
-            # if not np.all(np.isclose(full_observation_channel_frequencies[tuning,frequency_indices[tuning]], collected_frequencies[tuning], atol=1e-2)):
-            #     self.log_and_post_slackmessage(f"""
-            #     Not all collected frequencies match those in the expected observation frequencies. As such gain reordering may not be correct.
-            #     Continuing""", severity="WARNING", is_reply=True)
+            if not np.all(np.isin(collected_frequencies[tuning], full_observation_channel_frequencies[tuning,:])):
+                self.log_and_post_slackmessage(f"""
+                Not all collected frequencies are present inside those calculated to be the expected observation frequencies for tuning {tuning}.
+                Collected frequencies span range:
+                {collected_frequencies[tuning][0]} -> {collected_frequencies[tuning][-1]}Hz
+                Aborting run.""", severity="ERROR", is_reply=True)
+                return None, None
 
             #store the sortings for sorting the gains later
             sortings[tuning] = sort_indices
