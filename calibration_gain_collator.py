@@ -288,6 +288,7 @@ class CalibrationGainCollector():
             calibration_gains = redis_hget_keyvalues(self.redis_obj, GPU_GAINS_REDIS_HASH)
 
         obs_id = None
+        ref_ant = None
 
         #Which antenna have been provided - assume unchanging given timeout expired
         ants = list(calibration_gains[list(calibration_gains.keys())[0]]['gains'].keys())
@@ -316,7 +317,7 @@ class CalibrationGainCollector():
                 continue
             else:
                 obs_id = obs_id_t
-            if ref_ant_t != ref_ant:
+            if ref_ant is not None and ref_ant_t != ref_ant:
                 self.log_and_post_slackmessage(f"""
                     Skipping {start_freq_tune} payload from GPU node since it contains differing reference antenna 
                     {ref_ant_t}
