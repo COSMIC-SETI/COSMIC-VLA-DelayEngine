@@ -306,6 +306,7 @@ class CalibrationGainCollector():
                 raise ValueError
             self.log_and_post_slackmessage(f"Processing tuning {tune_idx}, start freq {start_freq}...", severity="DEBUG")
             obs_id_t = payload['obs_id']
+            ref_ant_t = payload['ref_ant']
             if obs_id is not None and obs_id_t != obs_id:
                 self.log_and_post_slackmessage(f"""
                     Skipping {start_freq_tune} payload from GPU node since it contains differing obs_id 
@@ -315,6 +316,15 @@ class CalibrationGainCollector():
                 continue
             else:
                 obs_id = obs_id_t
+            if ref_ant_t != ref_ant:
+                self.log_and_post_slackmessage(f"""
+                    Skipping {start_freq_tune} payload from GPU node since it contains differing reference antenna 
+                    {ref_ant_t}
+                    to previously encountered reference antenna
+                    {ref_ant}.""", severity="WARNING", is_reply = True)
+                continue
+            else:
+                ref_ant = ref_ant_t
             
             for ant, gain_dict in payload['gains'].items():
                 key = ant+"_"+str(tune_idx)
@@ -330,7 +340,7 @@ class CalibrationGainCollector():
 
             collected_frequencies[tune_idx] += payload['freqs_hz'] 
         
-        return ant_tune_to_collected_gain, collected_frequencies, ants, obs_id
+        return ant_tune_to_collected_gain, collected_frequencies, ants, obs_id, ref_ant
 
     def correctly_place_residual_phases_and_delays(self, ant_tune_to_collected_gain, 
         collected_frequencies, full_observation_channel_frequencies):
@@ -484,7 +494,7 @@ class CalibrationGainCollector():
 
                 #Start function that waits for hash_timeout before collecting redis hash.
                 try:
-                    ant_tune_to_collected_gains, collected_frequencies, self.ants, obs_id = self.collect_phases_for_hash_timeout(self.hash_timeout, manual_operation = manual_operation) 
+                    ant_tune_to_collected_gains, collected_frequencies, self.ants, obs_id, ref_ant = self.collect_phases_for_hash_timeout(self.hash_timeout, manual_operation = manual_operation) 
                 except Exception as e:
                     self.log_and_post_slackmessage(f"""
                     The collection of calibration from GPU gains failed:
@@ -828,7 +838,8 @@ class CalibrationGainCollector():
                         hash timeout = `{self.hash_timeout}s`, re-arm time = `{self.re_arm_time}s`,
                         fitting method = `{self.fit_method}`,
                         snr threshold = `{self.snr_threshold}`,
-                        source = `{self.source}`, 
+                        source = `{self.source}`,
+                        reference antenna = `{ref_ant}`,
                         results directory = `{output_dir}`
                     """, severity="INFO", is_reply=False, update_message=True)
                     self.log_and_post_slackmessage(f"""
