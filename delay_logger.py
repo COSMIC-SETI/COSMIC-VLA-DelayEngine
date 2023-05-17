@@ -88,11 +88,11 @@ class DelayLogger:
 
     There are carefully inserted wait statements here to account for delay loading times.
     """
-    def __init__(self, redis_obj, polling_rate):
+    def __init__(self, redis_obj, polling_rate, influxdb_token):
         self.redis_obj = redis_obj
         self.polling_rate = polling_rate
         self.bucket = "delays"
-        token = "uW0zkq-R5E0LUTHfeKPT0hFPNalsBQWHJXzDhtKAI4sCvtIZ8jXVVZ4cKGMkf7BmAgHfcr55Yzjg7sIZ4chySg=="
+        token = influxdb_token
         self.client = InfluxDBClient(url='http://localhost:8086', token=token)
         self.org="seti"
         self.ant_feng_map = ant_remotefeng_map.get_antennaFengineDict(redis_obj)
@@ -178,5 +178,8 @@ if __name__ == "__main__":
     else:
         print("Nothing to clean, continuing...")
 
-    feng_logger = DelayLogger(redis_obj, polling_rate = args.polling_rate)
+    if "INFLUXDB_TOKEN" in os.environ:
+        influxdb_token = os.environ["INFLUXDB_TOKEN"]
+
+    feng_logger = DelayLogger(redis_obj, args.polling_rate, influxdb_token)
     feng_logger.run()
