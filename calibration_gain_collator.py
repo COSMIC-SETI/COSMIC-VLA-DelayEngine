@@ -17,7 +17,6 @@ from textwrap import dedent
 import pprint
 from calibration_residual_kernals import calc_residuals_from_polyfit, calc_residuals_from_ifft, calc_calibration_ant_grade, calc_calibration_freq_grade, calc_full_grade
 from cosmic.observations.slackbot import SlackBot
-from cosmic.fengines import ant_remotefeng_map
 from cosmic.redis_actions import redis_obj, redis_hget_keyvalues, redis_publish_dict_to_hash, redis_clear_hash_contents, redis_publish_service_pulse, redis_publish_dict_to_channel
 from plot_delay_phase import plot_delay_phase, plot_gain_phase, plot_gain_amplitude, plot_snr_and_phase_spread, plot_gain_grade
 
@@ -104,7 +103,6 @@ class CalibrationGainCollector():
 
         redis_clear_hash_contents(self.redis_obj, GPU_GAINS_REDIS_HASH)
         self.meta_obs = redis_hget_keyvalues(self.redis_obj, "META")
-        self.ant_feng_map = ant_remotefeng_map.get_antennaFengineDict(self.redis_obj)
         if not self.dry_run:
             fixed_value_filepaths = redis_hget_keyvalues(self.redis_obj, CALIBRATION_CACHE_HASH)
             #Publish the initial fixed delays and trigger the F-Engines to load them
