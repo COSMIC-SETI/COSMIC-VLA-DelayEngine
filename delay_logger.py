@@ -51,7 +51,7 @@ def fetch_delay_status_dict(redis_obj, ant_feng_map):
     ant_delay_status_dict = {}
     antenna = list(ant_feng_map.keys())
     delay_status_dict = redis_hget_keyvalues(redis_obj, "FENG_delayStatus", keys = antenna)
-    ant_residual_phase_dict = redis_hget_keyvalues(redis_obj, "META_calibrationPhases", keys = antenna)
+    ant_correct_phase_dict = redis_hget_keyvalues(redis_obj, "META_calPhasesCorrectlyLoaded", keys = antenna)
     antname_lo_fshift_dict = delays.get_antToFshiftMap(
             redis_obj,
             ["A", "B", "C", "D"],
@@ -65,23 +65,13 @@ def fetch_delay_status_dict(redis_obj, ant_feng_map):
                 delay_dict = delay_status_dict[ant]
                 feng_delay_status = feng.get_status_delay_tracking()
                 delay_dict["ok"] = str(feng_delay_status["ok"])
-                delay_dict["on"] = str(feng_delay_status["is_alive"])
+                delay_dict["is_alive"] = str(feng_delay_status["is_alive"])
                 delay_dict["tracking"] = feng.get_delay_tracking_mode()
-                #Check phase_calibration values against META_residualPhases:
-                # phase_correct = []
                 feng_fshifts = np.round(delay_dict["loaded_fshift_hz"]).tolist()
                 expected_fshifts = np.round(configure.order_lo_dict_values(antname_lo_fshift_dict[ant])).tolist()
-                # if ant in ant_residual_phase_dict:
-                #     expected_residual_phase = (np.array(ant_residual_phase_dict[ant],dtype=float) + np.pi) % (2 * np.pi) - np.pi
-                #     for stream in range(4):
-                #         phase_correct += [bool(np.all(np.isclose(expected_residual_phase[stream,:],
-                #                         np.array(feng.phaserotate.get_phase_cal(stream),dtype=float), atol=1e-1)))] 
-                # else:
-                #     phase_correct += [bool(np.all(np.isclose(np.array([0.0]*1024,dtype=float),
-                #         np.array(feng.phaserotate.get_phase_cal(stream),dtype=float), atol=1e-1)))] 
                 delay_dict["expected_fshift_hz"] = expected_fshifts
                 delay_dict["fshifts_correct"] = feng_fshifts == expected_fshifts
-                # delay_dict["phase_cal_correct"] = phase_correct
+                delay_dict["phase_cal_correct"] = ant_correct_phase_dict[ant]
                 ant_delay_status_dict[ant] = delay_dict
             else:
                  ant_delay_status_dict[ant] =  f"No delay status available for {ant}..."
@@ -109,20 +99,18 @@ class DelayLogger:
         logger.info("Starting Delay logger...\n")
 
     def send_delaydata_to_influx_db(self,delay_status_dict):
-        # influx_db_json = []
         write_api = self.client.write_api(write_options=SYNCHRONOUS)
         for ant, state in delay_status_dict.items():
-            # influx_delay_dict = {}
-            is_on = state['on']
+            is_alive = state['is_alive']
             is_ok = state['ok']
-            if is_on == "None" or is_ok == "False":
+            if is_alive == "None":
                 continue
             timestamp = int(state["delays_loaded_at"]*1e9)
             delay_state = Point("delay_state").tag("ant",ant).field("tracking_mode",state['tracking']).time(timestamp)
             write_api.write(self.bucket,self.org, delay_state)
-            delay_state = Point("delay_state").tag("ant",ant).field("tracking_ok",int(is_ok)).time(timestamp)
+            delay_state = Point("delay_state").tag("ant",ant).field("tracking_ok",int(bool(is_ok))).time(timestamp)
             write_api.write(self.bucket,self.org, delay_state)
-            delay_state = Point("delay_state").tag("ant",ant).field("tracking_on",int(is_on)).time(timestamp)
+            delay_state = Point("delay_state").tag("ant",ant).field("tracking_alive",int(bool(is_alive))).time(timestamp)
             write_api.write(self.bucket,self.org, delay_state)
             delay_state = Point("delay_state").tag("ant",ant).field("loadtime_accurate",int(state['loadtime_accurate'])).time(timestamp)
             write_api.write(self.bucket,self.org, delay_state)
@@ -131,6 +119,8 @@ class DelayLogger:
             delay_state = Point("delay_state").tag("ant",ant).field("delay_correct",int(all(state['delay_correct']))).time(timestamp)
             write_api.write(self.bucket,self.org, delay_state)
             delay_state = Point("delay_state").tag("ant",ant).field("phase_correct",int(all(state['phase_correct']))).time(timestamp)
+            write_api.write(self.bucket,self.org, delay_state)
+            delay_state = Point("delay_state").tag("ant",ant).field("phase_cal_correct",int(state['phase_cal_correct'])).time(timestamp)
             write_api.write(self.bucket,self.org, delay_state)
             for stream in range(4):
                 value = Point("delay_values").tag("ant",ant).tag("steam",stream).field("firmware_delay_ns",state['firmware_delay_ns'][stream]).time(timestamp)
