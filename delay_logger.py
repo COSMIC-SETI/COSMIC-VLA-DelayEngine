@@ -147,6 +147,7 @@ class DelayLogger:
             write_api.write(self.bucket,self.org, delay_state)
             delay_state = Point("delay_state").tag("ant",ant).field("phase_cal_correct",int(state['phase_cal_correct'])).time(timestamp)
             write_api.write(self.bucket,self.org, delay_state)
+
             for stream in range(4):
                 value = Point("delay_values").tag("ant",ant).tag("stream",stream).field("firmware_delay_ns",state['firmware_delay_ns'][stream]).time(timestamp)
                 write_api.write(self.bucket,self.org, value)
@@ -162,7 +163,7 @@ class DelayLogger:
                 write_api.write(self.bucket,self.org, value)
 
                 #Load fixed delays contents
-                value = Point("fix_delays").tag("ant",ant).tag("steam",stream).field("fixed_delay_ns",fixed_delays[stream]).time(time_now)
+                value = Point("fix_delays").tag("ant",ant).tag("stream",stream).field("fixed_delay_ns",fixed_delays[stream]).time(time_now)
                 write_api.write(self.bucket,self.org, value)
                     
             for tune in range(2):
