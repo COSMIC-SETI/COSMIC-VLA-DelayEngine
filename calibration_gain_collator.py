@@ -54,10 +54,6 @@ OBSERVATIONS_CHANNEL = "observations"
 
 CHANNEL_ORDER=[OBSERVATIONS_CHANNEL, SCAN_END_CHANNEL, GPU_GAINS_REDIS_CHANNEL]
 
-CHANNEL_MESSAGES={OBSERVATIONS_CHANNEL:[],
-                  SCAN_END_CHANNEL:[],
-                  GPU_GAINS_REDIS_CHANNEL:[]}
-
 class CalibrationGainCollector():
     def __init__(self, redis_obj, fetch_config = False, user_output_dir='.', hash_timeout=20, re_arm_time = 30, fit_method = "fourier", dry_run = False,
     nof_streams = 4, nof_tunings = 2, nof_pols = 2, nof_channels = 1024, slackbot=None, input_fixed_delays = None, input_fixed_phases = None,
@@ -184,6 +180,12 @@ class CalibrationGainCollector():
                 self.slack_message_ts = self.slackbot.last_message_ts
 
     def await_trigger(self):
+        
+        #Reinitialise channel messages
+        CHANNEL_MESSAGES={OBSERVATIONS_CHANNEL:[],
+                  SCAN_END_CHANNEL:[],
+                  GPU_GAINS_REDIS_CHANNEL:[]}
+        
         pubsub = self.redis_obj.pubsub(ignore_subscribe_messages=True)
         for channel in CHANNEL_ORDER:
             try:
