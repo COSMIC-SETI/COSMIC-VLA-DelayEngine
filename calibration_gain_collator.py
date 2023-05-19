@@ -502,7 +502,7 @@ class CalibrationGainCollector():
                     self.log_and_post_slackmessage(f"""
                     The collection of calibration from GPU gains failed:
                     {e}
-                    Ignoring current trigger.""", severity="ERROR")
+                    Ignoring current trigger.""", severity="ERROR", is_reply=True)
                     if manual_operation:
                         return
                     continue
