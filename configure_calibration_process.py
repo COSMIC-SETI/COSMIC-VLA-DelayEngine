@@ -27,7 +27,8 @@ def load_and_configure_calibrations(hash_timeout=20, re_arm_time = 30, fit_metho
     Reconfiguring calibration process with following configuration:
     ```{config_dict}```"""
     print(msg)
-    slackbot.post_message(msg)
+    if slackbot is not None:
+        slackbot.post_message(msg)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(

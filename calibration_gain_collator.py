@@ -209,12 +209,9 @@ class CalibrationGainCollector():
                     and
                     `{self.input_fixed_phases}`
                     respectively.""", severity="INFO", is_reply = True)
+                    self.configure_from_hash()
                     load_delay_calibrations(self.input_fixed_delays)
-                    ant_cal_phase_correct = load_phase_calibrations(self.input_fixed_phases)
-                    self.log_and_post_slackmessage(f"""
-                    State of correct phase calibration loading:
-                    {ant_cal_phase_correct}
-                    """, severity="INFO", is_reply = True)
+                    load_phase_calibrations(self.input_fixed_phases)
                     self.scan_is_ending=False
 
                 message = pubsub.get_message()
@@ -769,7 +766,7 @@ class CalibrationGainCollector():
                 # Update the fixed phases on the F-Engines and update the fixed_phase path
                 if not self.dry_run:
                     self.log_and_post_slackmessage("""Updating fixed-phases on *all* antenna now...""", severity = "INFO", is_reply=True)
-                    ant_cal_phase_correct = load_phase_calibrations(modified_fixed_phases_path)
+                    ant_cal_phase_correct = load_phase_calibrations(modified_fixed_phases_path, check_phases=True)
                     self.log_and_post_slackmessage(f"""
                     State of correct phase calibration loading:
                     {ant_cal_phase_correct}
