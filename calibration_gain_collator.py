@@ -80,6 +80,7 @@ class CalibrationGainCollector():
         self.projid = "None"
         self.dataset = "None"   
         self.scan_is_ending=False
+        self.obs_is_starting = False
         self.scan_end=0
 
         if fetch_config:
@@ -202,9 +203,10 @@ class CalibrationGainCollector():
             while True:
                 redis_publish_service_pulse(self.redis_obj, SERVICE_NAME)
                 #Check if it is time to reset the calibration values:
-                if time.time() >= self.scan_end and self.scan_is_ending:
+                if time.time() >= self.scan_end and self.scan_is_ending and not self.obs_is_starting:
                     self.log_and_post_slackmessage(f"""
-                    Scan has ended at {time.ctime(self.scan_end)}, fixed delay and fixed phase values are being reset to
+                    Scan has ended at {time.ctime(self.scan_end)}, no expected upcoming observations,
+                    fixed delay and fixed phase values are being reset to
                     `{self.input_fixed_delays}`
                     and
                     `{self.input_fixed_phases}`
@@ -240,6 +242,7 @@ class CalibrationGainCollector():
                             self.projid = message_data['project_id']
                             self.dataset = message_data['dataset_id']
                             self.meta_obs = redis_hget_keyvalues(self.redis_obj, "META")
+                            self.obs_is_starting = True
                         if "MoveARG" in message_data['postprocess']:
                             self.user_output_dir = (message_data['postprocess']["MoveARG"]).split('$',1)[0]
                             self.log_and_post_slackmessage(f"""
@@ -248,6 +251,7 @@ class CalibrationGainCollector():
                             Calibration solutions and results will be saved to 
                             the same directory in folder `calibration`.
                             """, severity = "INFO", is_reply = True)
+                            self.obs_is_starting = True
                             continue
                             
                     if channel == SCAN_END_CHANNEL:
@@ -263,6 +267,7 @@ class CalibrationGainCollector():
                         if message_data is not None:
                             self.log_and_post_slackmessage(f"""
                             GPU Gains message {message_data} received.""", severity="DEBUG")
+                            self.obs_is_starting = False
                             return message_data
                         else:
                             continue                
