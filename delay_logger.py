@@ -99,6 +99,10 @@ class DelayLogger:
         logger.info("Starting Delay logger...\n")
 
     def send_delaydata_to_influx_db(self,delay_status_dict):
+        """
+        Given a delay status dictionary, collect from Redis hashes the geometric model coefficients
+        and fixed delays for loading to the InfluxDB database under bucket 'delays'
+        """
         delay_model = redis_hget_keyvalues(redis_obj, "META_modelDelays")
         calib_delays = redis_hget_keyvalues(redis_obj, "META_calibrationDelays")
         write_api = self.client.write_api(write_options=SYNCHRONOUS)
@@ -174,7 +178,7 @@ class DelayLogger:
                 
     def run(self):
         """
-        Every polling rate, fetch from fetch_delay_status_dict() an antenna:delaydict mapping 
+        Every polling period, fetch from fetch_delay_status_dict() an antenna:delaydict mapping 
         to give an indication of the correctness of tracking.
         """
         i = 0
