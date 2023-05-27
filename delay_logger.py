@@ -105,7 +105,19 @@ class DelayLogger:
         """
         delay_model = redis_hget_keyvalues(redis_obj, "META_modelDelays")
         calib_delays = redis_hget_keyvalues(redis_obj, "META_calibrationDelays")
+        phase_centre_dict = redis_hget_keyvalues(redis_obj, "META_phaseControllerPointing")
         write_api = self.client.write_api(write_options=SYNCHRONOUS)
+        #Load phase centre controller ra/dec
+        timestamp = int(phase_centre_dict['loadtime']*1000)
+        controller_pt = Point("phase_centre_controller").field("dec_deg",phase_centre_dict["dec_deg"]).time(timestamp)
+        write_api.write(self.bucket,self.org, controller_pt)
+        controller_pt = Point("phase_centre_controller").field("ra_deg",phase_centre_dict["ra_deg"]).time(timestamp)
+        write_api.write(self.bucket,self.org, controller_pt)
+        for tune in range(2):
+            controller_pt = Point("phase_centre_controller").tag("tune",tune).field("sslo",phase_centre_dict["sslo"][tune]).time(timestamp)
+            write_api.write(self.bucket,self.org, controller_pt)
+            controller_pt = Point("phase_centre_controller").tag("tune",tune).field("sideband",phase_centre_dict["sideband"][tune]).time(timestamp)
+            write_api.write(self.bucket,self.org, controller_pt)
         ra_dec_not_loaded = True
         time_now = time.time_ns()
         for ant, state in delay_status_dict.items():
