@@ -12,23 +12,26 @@ def load_and_configure_calibrations(hash_timeout=20, re_arm_time = 30, fit_metho
                                     snr_threshold = 4.0, slackbot = None):
     input_fixed_delays = os.path.abspath(input_fixed_delays)
     input_fixed_phases = os.path.abspath(input_fixed_phases)
-    config_dict={
-        "hash_timeout":hash_timeout,
-        "re_arm_time":re_arm_time,
-        "fit_method":fit_method,
-        "input_fixed_delays":input_fixed_delays,
-        "input_fixed_phases":input_fixed_phases,
-        "snr_threshold":snr_threshold
-    }
-    redis_publish_dict_to_hash(redis_obj, CONFIG_HASH, config_dict)
-    load_delay_calibrations(input_fixed_delays)
-    load_phase_calibrations(input_fixed_phases)
-    msg = f"""
-    Reconfiguring calibration process with following configuration:
-    ```{config_dict}```"""
-    print(msg)
-    if slackbot is not None:
-        slackbot.post_message(msg)
+    if os.path.isfile(input_fixed_delays) and os.path.isfile(input_fixed_phases):
+        config_dict={
+            "hash_timeout":hash_timeout,
+            "re_arm_time":re_arm_time,
+            "fit_method":fit_method,
+            "input_fixed_delays":input_fixed_delays,
+            "input_fixed_phases":input_fixed_phases,
+            "snr_threshold":snr_threshold
+        }
+        redis_publish_dict_to_hash(redis_obj, CONFIG_HASH, config_dict)
+        load_delay_calibrations(input_fixed_delays)
+        load_phase_calibrations(input_fixed_phases)
+        msg = f"""
+        Reconfiguring calibration process with following configuration:
+        ```{config_dict}```"""
+        print(msg)
+        if slackbot is not None:
+            slackbot.post_message(msg)
+    else:
+        print("Provided fixed phases and delays files do not exist. Aborting.")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(

@@ -771,7 +771,7 @@ class CalibrationGainCollector():
                 # Update the fixed phases on the F-Engines and update the fixed_phase path
                 if not self.dry_run:
                     self.log_and_post_slackmessage("""Updating fixed-phases on *all* antenna now...""", severity = "INFO", is_reply=True)
-                    load_phase_calibrations(modified_fixed_phases_path, check_phases=True)
+                    load_phase_calibrations(modified_fixed_phases_path)
                     
                 #-------------------------PLOT GENERATION AND SAVING-------------------------#
                 #Plot phase and delay residuals
