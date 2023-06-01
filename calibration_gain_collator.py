@@ -644,6 +644,7 @@ class CalibrationGainCollector():
                         Calculated overall grade for calibration recording of:
                         `{full_grade}`
                         """, severity = "INFO", is_reply=True)
+                redis_publish_dict_to_hash(self.redis_obj, CALIBRATION_CACHE_HASH, {"grade":full_grade})
 
                 self.log_and_post_slackmessage(f"""
                 Subtracting fixed phases found in
