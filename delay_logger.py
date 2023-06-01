@@ -63,8 +63,8 @@ def fetch_delay_status_dict(redis_obj, ant_feng_map):
             if ant in delay_status_dict:
                 delay_dict = delay_status_dict[ant]
                 feng_delay_status = feng.get_status_delay_tracking()
-                delay_dict["ok"] = str(feng_delay_status["ok"])
-                delay_dict["is_alive"] = str(feng_delay_status["is_alive"])
+                delay_dict["ok"] = feng_delay_status["ok"]
+                delay_dict["is_alive"] = -1 if feng_delay_status["is_alive"] is None else int(feng_delay_status["is_alive"])
                 delay_dict["tracking"] = feng.get_delay_tracking_mode()
                 feng_fshifts = np.round(delay_dict["loaded_fshift_hz"]).tolist()
                 expected_fshifts = np.round(configure.order_lo_dict_values(antname_lo_fshift_dict[ant])).tolist()
@@ -102,29 +102,23 @@ class DelayLogger:
         and fixed delays for loading to the InfluxDB database under bucket 'delays'
         """
         delay_model = redis_hget_keyvalues(redis_obj, "META_modelDelays")
-        calib_delays = redis_hget_keyvalues(redis_obj, "META_calibrationDelays")
         phase_centre_dict = redis_hget_keyvalues(redis_obj, "META_phaseControllerPointing")
         write_api = self.client.write_api(write_options=SYNCHRONOUS)
         #Load phase centre controller ra/dec
-        timestamp = int(phase_centre_dict['loadtime']*1000)
-        controller_pt = Point("phase_centre_controller").field("dec_deg",phase_centre_dict["dec_deg"]).time(timestamp)
+        phase_centre_controller_timestamp = int(phase_centre_dict['loadtime']*1000)
+        controller_pt = Point("phase_centre_controller").field("dec_deg",phase_centre_dict["dec_deg"]).time(phase_centre_controller_timestamp)
         write_api.write(self.bucket,self.org, controller_pt)
-        controller_pt = Point("phase_centre_controller").field("ra_deg",phase_centre_dict["ra_deg"]).time(timestamp)
+        controller_pt = Point("phase_centre_controller").field("ra_deg",phase_centre_dict["ra_deg"]).time(phase_centre_controller_timestamp)
         write_api.write(self.bucket,self.org, controller_pt)
         for tune in range(2):
-            controller_pt = Point("phase_centre_controller").tag("tune",tune).field("sslo",phase_centre_dict["sslo"][tune]).time(timestamp)
+            controller_pt = Point("phase_centre_controller").tag("tune",tune).field("sslo",phase_centre_dict["sslo"][tune]).time(phase_centre_controller_timestamp)
             write_api.write(self.bucket,self.org, controller_pt)
-            controller_pt = Point("phase_centre_controller").tag("tune",tune).field("sideband",phase_centre_dict["sideband"][tune]).time(timestamp)
+            controller_pt = Point("phase_centre_controller").tag("tune",tune).field("sideband",phase_centre_dict["sideband"][tune]).time(phase_centre_controller_timestamp)
             write_api.write(self.bucket,self.org, controller_pt)
         ra_dec_not_loaded = True
-        time_now = time.time_ns()
         for ant, state in delay_status_dict.items():
             is_alive = state['is_alive']
             is_ok = state['ok']
-            if ant in calib_delays:
-                fixed_delays = np.fromiter(calib_delays[ant].values(),dtype=float)
-            else:
-                fixed_delays = np.zeros(4)
             if is_alive == "None":
                 continue
             #Process delay model contents
@@ -137,19 +131,18 @@ class DelayLogger:
                 delay_coeff = Point("delay_coeff").tag("ant",ant).field("delay_raterate_nsps2",delay_model[ant]["delay_raterate_nsps2"]).time(timestamp)
                 write_api.write(self.bucket,self.org, delay_coeff)
                 if ra_dec_not_loaded:
-                    timestamp = int(delay_model[ant]["loadtime_us"]*1000)
-                    delay_point = Point("delay_pointing").field("deg_ra",delay_model["deg_ra"]).time(timestamp)
+                    delay_point = Point("delay_pointing").field("deg_ra",delay_model["deg_ra"]).time(phase_centre_controller_timestamp)
                     write_api.write(self.bucket,self.org, delay_point)
-                    delay_point = Point("delay_pointing").field("deg_dec",delay_model["deg_dec"]).time(timestamp)
+                    delay_point = Point("delay_pointing").field("deg_dec",delay_model["deg_dec"]).time(phase_centre_controller_timestamp)
                     write_api.write(self.bucket,self.org, delay_point)
                     ra_dec_not_loaded = False
 
             timestamp = int(state["delays_loaded_at"]*1e9)
             delay_state = Point("delay_state").tag("ant",ant).field("tracking_mode",state['tracking']).time(timestamp)
             write_api.write(self.bucket,self.org, delay_state)
-            delay_state = Point("delay_state").tag("ant",ant).field("tracking_ok",int(bool(is_ok))).time(timestamp)
+            delay_state = Point("delay_state").tag("ant",ant).field("tracking_ok",int(is_ok)).time(timestamp)
             write_api.write(self.bucket,self.org, delay_state)
-            delay_state = Point("delay_state").tag("ant",ant).field("tracking_alive",int(bool(is_alive))).time(timestamp)
+            delay_state = Point("delay_state").tag("ant",ant).field("tracking_alive",is_alive).time(timestamp)
             write_api.write(self.bucket,self.org, delay_state)
             delay_state = Point("delay_state").tag("ant",ant).field("loadtime_accurate",int(state['loadtime_accurate'])).time(timestamp)
             write_api.write(self.bucket,self.org, delay_state)
@@ -172,10 +165,6 @@ class DelayLogger:
                 value = Point("delay_values").tag("ant",ant).tag("stream",stream).field("loaded_fshift_hz",state['loaded_fshift_hz'][stream]).time(timestamp)
                 write_api.write(self.bucket,self.org, value)
                 value = Point("delay_values").tag("ant",ant).tag("stream",stream).field("expected_fshift_hz",state['expected_fshift_hz'][stream]).time(timestamp)
-                write_api.write(self.bucket,self.org, value)
-
-                #Load fixed delays contents
-                value = Point("fix_delays").tag("ant",ant).tag("stream",stream).field("fixed_delay_ns",fixed_delays[stream]).time(time_now)
                 write_api.write(self.bucket,self.org, value)
                     
             for tune in range(2):
