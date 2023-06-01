@@ -51,7 +51,6 @@ def fetch_delay_status_dict(redis_obj, ant_feng_map):
     ant_delay_status_dict = {}
     antenna = list(ant_feng_map.keys())
     delay_status_dict = redis_hget_keyvalues(redis_obj, "FENG_delayStatus", keys = antenna)
-    ant_correct_phase_dict = redis_hget_keyvalues(redis_obj, "META_calPhasesCorrectlyLoaded", keys = antenna)
     antname_lo_fshift_dict = delays.get_antToFshiftMap(
             redis_obj,
             ["A", "B", "C", "D"],
@@ -71,7 +70,6 @@ def fetch_delay_status_dict(redis_obj, ant_feng_map):
                 expected_fshifts = np.round(configure.order_lo_dict_values(antname_lo_fshift_dict[ant])).tolist()
                 delay_dict["expected_fshift_hz"] = expected_fshifts
                 delay_dict["fshifts_correct"] = feng_fshifts == expected_fshifts
-                delay_dict["phase_cal_correct"] = ant_correct_phase_dict[ant]
                 ant_delay_status_dict[ant] = delay_dict
             else:
                  ant_delay_status_dict[ant] =  f"No delay status available for {ant}..."
@@ -160,8 +158,6 @@ class DelayLogger:
             delay_state = Point("delay_state").tag("ant",ant).field("delay_correct",int(all(state['delay_correct']))).time(timestamp)
             write_api.write(self.bucket,self.org, delay_state)
             delay_state = Point("delay_state").tag("ant",ant).field("phase_correct",int(all(state['phase_correct']))).time(timestamp)
-            write_api.write(self.bucket,self.org, delay_state)
-            delay_state = Point("delay_state").tag("ant",ant).field("phase_cal_correct",int(state['phase_cal_correct'])).time(timestamp)
             write_api.write(self.bucket,self.org, delay_state)
 
             for stream in range(4):
