@@ -20,6 +20,10 @@ from cosmic.observations.slackbot import SlackBot
 from cosmic.redis_actions import redis_obj, redis_hget_keyvalues, redis_publish_dict_to_hash, redis_clear_hash_contents, redis_publish_service_pulse, redis_publish_dict_to_channel
 from plot_delay_phase import plot_delay_phase, plot_gain_phase, plot_gain_amplitude, plot_snr_and_phase_spread, plot_gain_grade
 
+from cosmic_database import entities
+from cosmic_database.engine import CosmicDB_Engine
+from datetime import datetime
+
 LOGFILENAME = "/home/cosmic/logs/DelayCalibration.log"
 logger = logging.getLogger('calibration_delays')
 logger.setLevel(logging.DEBUG)
@@ -57,7 +61,7 @@ CHANNEL_ORDER=[OBSERVATIONS_CHANNEL, SCAN_END_CHANNEL, GPU_GAINS_REDIS_CHANNEL]
 class CalibrationGainCollector():
     def __init__(self, redis_obj, fetch_config = False, user_output_dir='.', hash_timeout=20, re_arm_time = 30, fit_method = "fourier", dry_run = False,
     nof_streams = 4, nof_tunings = 2, nof_pols = 2, nof_channels = 1024, slackbot=None, input_fixed_delays = None, input_fixed_phases = None,
-    input_json_dict = None, input_fcents = None, input_sideband = None, input_tbin = None, snr_threshold = 4.0):
+    input_json_dict = None, input_fcents = None, input_sideband = None, input_tbin = None, snr_threshold = 4.0, cosmicdb_engine_url:str = None):
         self.redis_obj = redis_obj
         self.user_output_dir = user_output_dir
         self.hash_timeout = hash_timeout
@@ -82,6 +86,10 @@ class CalibrationGainCollector():
         self.scan_is_ending=False
         self.obs_is_starting = False
         self.scan_end=0
+
+        self.cosmicdb_engine = None
+        if cosmicdb_engine_url is not None:
+            self.cosmicdb_engine = CosmicDB_Engine(engine_url=cosmicdb_engine_url)
 
         if fetch_config:
             #This will override the above properties IF the redis configuration hash is populated and exists
@@ -241,6 +249,7 @@ class CalibrationGainCollector():
                             Collected mcast metadata now...""", severity = "INFO", is_reply = True)
                             self.projid = message_data['project_id']
                             self.dataset = message_data['dataset_id']
+                            self.start_epoch_seconds = message_data['start_epoch_seconds']
                             self.meta_obs = redis_hget_keyvalues(self.redis_obj, "META")
                             self.obs_is_starting = True
                         if "MoveARG" in message_data['postprocess']:
@@ -645,7 +654,6 @@ class CalibrationGainCollector():
                         `{full_grade}`
                         """, severity = "INFO", is_reply=True)
                 redis_publish_dict_to_hash(self.redis_obj, CALIBRATION_CACHE_HASH, {"grade":full_grade})
-
                 self.log_and_post_slackmessage(f"""
                 Subtracting fixed phases found in
                 ```{fixed_phase_filepath}```
@@ -774,6 +782,68 @@ class CalibrationGainCollector():
                     self.log_and_post_slackmessage("""Updating fixed-phases on *all* antenna now...""", severity = "INFO", is_reply=True)
                     load_phase_calibrations(modified_fixed_phases_path)
                     
+                #-----------------------------COMMIT ENTITY TO DB-----------------------------#
+                try:
+                    with self.cosmicdb_engine.session() as session:
+                        select_criteria = {
+                            "scan_id": self.meta_obs["scanid"],
+                            "start": datetime.fromtimestamp(self.start_epoch_seconds),
+                        }
+                        self.log_and_post_slackmessage(f"""
+                            Creating calibration entity for observation: {select_criteria}
+                            """, severity="INFO", is_reply=True
+                        )
+                        db_obs = self.cosmicdb_engine.select_entity(
+                            session, entities.CosmicDB_Observation, **select_criteria
+                        )
+
+                        assert db_obs, "No observation found."
+
+                        db_obscal = entities.CosmicDB_ObservationCalibration(
+                            observation_id=db_obs.id,
+
+                            reference_antenna_name=ref_ant,
+                            flagged_percentage=-1.0, #TODO
+                            overall_grade=full_grade,
+                            file_uri=output_dir
+                        )
+                        
+                        session.add(db_obscal)
+                        session.commit()
+                        # session.refresh(db_obscal)
+
+                        # stream_pol_tuning_map = [
+                        #     ("r", "AC"),
+                        #     ("l", "AC"),
+                        #     ("r", "BD"),
+                        #     ("l", "BD")
+                        # ]
+
+                        # for ant_name, gain_matrix in full_gains_map.items():
+                        #     for stream_idx in range(gain_matrix.shape[0]):
+                        #         stream, tuning = stream_pol_tuning_map[stream_idx]
+                        #         for chan_idx in range(gain_matrix.shape[1]):
+                        #             chan_freq_hz = full_observation_channel_frequencies_hz[stream_idx, chan_idx]
+                                    
+                        #             session.add(
+                        #                 CosmicDB_CalibrationGain(
+                        #                     calibration_id=db_obscal.id,
+                        #                     antenna_name=ant_name,
+                        #                     observation_id=db_obs.id,
+                        #                     tuning=tuning,
+                        #                     channel_frequency=chan_freq_hz,
+                        #                     gain_real=numpy.real(gain_matrix[stream_idx, chan_idx]),
+                        #                     gain_imag=numpy.imag(gain_matrix[stream_idx, chan_idx]),
+                        #                 )
+                        #             )
+
+                        # session.commit()
+                except BaseException as err:
+                    self.log_and_post_slackmessage(f"""
+                    Failed to post database entities: {traceback.format_exc()}
+                    """, severity = "WARNING", is_reply=True)
+
+
                 #-------------------------PLOT GENERATION AND SAVING-------------------------#
                 #Plot phase and delay residuals
                 delay_file_path, phase_file_path_ac, phase_file_path_bd = plot_delay_phase(delay_residual_map, phase_cal_map, 
@@ -892,6 +962,12 @@ if __name__ == "__main__":
                         help="""The snr threshold above which the process will reject applying the calculated delay
                         and phase residual calibration values""")
     parser.add_argument('file', type=argparse.FileType('r'), nargs='*')
+    parser.add_argument(
+        "--cosmicdb-engine-configuration",
+        type=str,
+        default=None,
+        help="The YAML file path specifying the COSMIC database.",
+    )
     args = parser.parse_args()
     manual_run = False
     input_json_dict = {}
@@ -940,8 +1016,13 @@ if __name__ == "__main__":
     if output_dir is not None and not os.path.exists(output_dir):
         os.makedirs(output_dir)
 
+    cosmicdb_engine_url = None
+    if args.cosmicdb_engine_configuration is not None:
+        cosmicdb_engine_url = CosmicDB_Engine._create_url(args.cosmicdb_engine_configuration)
+
     calibrationGainCollector = CalibrationGainCollector(redis_obj, fetch_config = args.run_as_service, user_output_dir = output_dir, hash_timeout = args.hash_timeout, dry_run = args.dry_run,
                                 re_arm_time = args.re_arm_time, fit_method = args.fit_method, slackbot = slackbot, input_fixed_delays = input_fixed_delays,
                                 input_fixed_phases = input_fixed_phases, input_json_dict = None if not bool(input_json_dict) else input_json_dict,
-                                input_fcents = args.fcentmhz, input_sideband = args.sideband, input_tbin = args.tbin, snr_threshold = args.snr_threshold)
+                                input_fcents = args.fcentmhz, input_sideband = args.sideband, input_tbin = args.tbin, snr_threshold = args.snr_threshold,
+                                cosmicdb_engine_url = cosmicdb_engine_url)
     calibrationGainCollector.start()
