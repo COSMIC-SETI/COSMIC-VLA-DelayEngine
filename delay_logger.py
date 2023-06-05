@@ -136,14 +136,14 @@ class DelayLogger:
                     delay_point = Point("delay_pointing").field("deg_dec",delay_model["deg_dec"]).time(phase_centre_controller_timestamp)
                     write_api.write(self.bucket,self.org, delay_point)
                     ra_dec_not_loaded = False
-
-            timestamp = int(state["delays_loaded_at"]*1e9)
+            timestamp = int(time.time_ns())
             delay_state = Point("delay_state").tag("ant",ant).field("tracking_mode",state['tracking']).time(timestamp)
             write_api.write(self.bucket,self.org, delay_state)
             delay_state = Point("delay_state").tag("ant",ant).field("tracking_ok",int(is_ok)).time(timestamp)
             write_api.write(self.bucket,self.org, delay_state)
             delay_state = Point("delay_state").tag("ant",ant).field("tracking_alive",is_alive).time(timestamp)
             write_api.write(self.bucket,self.org, delay_state)
+            timestamp = int(state["delays_loaded_at"]*1e9)
             delay_state = Point("delay_state").tag("ant",ant).field("loadtime_accurate",int(state['loadtime_accurate'])).time(timestamp)
             write_api.write(self.bucket,self.org, delay_state)
             delay_state = Point("delay_state").tag("ant",ant).field("fshifts_correct",int(state['fshifts_correct'])).time(timestamp)
