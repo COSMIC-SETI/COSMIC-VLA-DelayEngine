@@ -918,7 +918,8 @@ class CalibrationGainCollector():
                         snr threshold = `{self.snr_threshold}`,
                         source = `{self.source}`,
                         reference antenna = `{ref_ant}`,
-                        results directory = `{output_dir}`
+                        results directory = `{output_dir}`,
+                        calibration grade = `{full_grade}`,
                     """, severity="INFO", is_reply=False, update_message=True)
                     self.log_and_post_slackmessage(f"""
                         Clearing redis hash: {GPU_GAINS_REDIS_HASH} contents in anticipation of next calibration run.
