@@ -117,61 +117,64 @@ class DelayLogger:
             write_api.write(self.bucket,self.org, controller_pt)
         ra_dec_not_loaded = True
         for ant, state in delay_status_dict.items():
-            is_alive = state['is_alive']
-            is_ok = state['ok']
-            if is_alive == "None":
+            if isinstance(state,str):
                 continue
-            #Process delay model contents
-            if ant in delay_model:
-                timestamp = int(delay_model[ant]["time_value"]*1e9)
-                delay_coeff = Point("delay_coeff").tag("ant",ant).field("delay_ns",delay_model[ant]["delay_ns"]).time(timestamp)
-                write_api.write(self.bucket,self.org, delay_coeff)
-                delay_coeff = Point("delay_coeff").tag("ant",ant).field("delay_rate_nsps",delay_model[ant]["delay_rate_nsps"]).time(timestamp)
-                write_api.write(self.bucket,self.org, delay_coeff)
-                delay_coeff = Point("delay_coeff").tag("ant",ant).field("delay_raterate_nsps2",delay_model[ant]["delay_raterate_nsps2"]).time(timestamp)
-                write_api.write(self.bucket,self.org, delay_coeff)
-                if ra_dec_not_loaded:
-                    delay_point = Point("delay_pointing").field("deg_ra",delay_model["deg_ra"]).time(phase_centre_controller_timestamp)
-                    write_api.write(self.bucket,self.org, delay_point)
-                    delay_point = Point("delay_pointing").field("deg_dec",delay_model["deg_dec"]).time(phase_centre_controller_timestamp)
-                    write_api.write(self.bucket,self.org, delay_point)
-                    ra_dec_not_loaded = False
-            timestamp = int(time.time_ns())
-            delay_state = Point("delay_state").tag("ant",ant).field("tracking_mode",state['tracking']).time(timestamp)
-            write_api.write(self.bucket,self.org, delay_state)
-            delay_state = Point("delay_state").tag("ant",ant).field("tracking_ok",int(is_ok)).time(timestamp)
-            write_api.write(self.bucket,self.org, delay_state)
-            delay_state = Point("delay_state").tag("ant",ant).field("tracking_alive",is_alive).time(timestamp)
-            write_api.write(self.bucket,self.org, delay_state)
-            timestamp = int(state["delays_loaded_at"]*1e9)
-            delay_state = Point("delay_state").tag("ant",ant).field("loadtime_accurate",int(state['loadtime_accurate'])).time(timestamp)
-            write_api.write(self.bucket,self.org, delay_state)
-            delay_state = Point("delay_state").tag("ant",ant).field("fshifts_correct",int(state['fshifts_correct'])).time(timestamp)
-            write_api.write(self.bucket,self.org, delay_state)
-            delay_state = Point("delay_state").tag("ant",ant).field("delay_correct",int(all(state['delay_correct']))).time(timestamp)
-            write_api.write(self.bucket,self.org, delay_state)
-            delay_state = Point("delay_state").tag("ant",ant).field("phase_correct",int(all(state['phase_correct']))).time(timestamp)
-            write_api.write(self.bucket,self.org, delay_state)
+            elif isinstance(state,dict):
+                is_alive = state['is_alive']
+                is_ok = state['ok']
+                if is_alive == "None":
+                    continue
+                #Process delay model contents
+                if ant in delay_model:
+                    timestamp = int(delay_model[ant]["time_value"]*1e9)
+                    delay_coeff = Point("delay_coeff").tag("ant",ant).field("delay_ns",delay_model[ant]["delay_ns"]).time(timestamp)
+                    write_api.write(self.bucket,self.org, delay_coeff)
+                    delay_coeff = Point("delay_coeff").tag("ant",ant).field("delay_rate_nsps",delay_model[ant]["delay_rate_nsps"]).time(timestamp)
+                    write_api.write(self.bucket,self.org, delay_coeff)
+                    delay_coeff = Point("delay_coeff").tag("ant",ant).field("delay_raterate_nsps2",delay_model[ant]["delay_raterate_nsps2"]).time(timestamp)
+                    write_api.write(self.bucket,self.org, delay_coeff)
+                    if ra_dec_not_loaded:
+                        delay_point = Point("delay_pointing").field("deg_ra",delay_model["deg_ra"]).time(phase_centre_controller_timestamp)
+                        write_api.write(self.bucket,self.org, delay_point)
+                        delay_point = Point("delay_pointing").field("deg_dec",delay_model["deg_dec"]).time(phase_centre_controller_timestamp)
+                        write_api.write(self.bucket,self.org, delay_point)
+                        ra_dec_not_loaded = False
+                timestamp = int(time.time_ns())
+                delay_state = Point("delay_state").tag("ant",ant).field("tracking_mode",state['tracking']).time(timestamp)
+                write_api.write(self.bucket,self.org, delay_state)
+                delay_state = Point("delay_state").tag("ant",ant).field("tracking_ok",int(is_ok)).time(timestamp)
+                write_api.write(self.bucket,self.org, delay_state)
+                delay_state = Point("delay_state").tag("ant",ant).field("tracking_alive",is_alive).time(timestamp)
+                write_api.write(self.bucket,self.org, delay_state)
+                timestamp = int(state["delays_loaded_at"]*1e9)
+                delay_state = Point("delay_state").tag("ant",ant).field("loadtime_accurate",int(state['loadtime_accurate'])).time(timestamp)
+                write_api.write(self.bucket,self.org, delay_state)
+                delay_state = Point("delay_state").tag("ant",ant).field("fshifts_correct",int(state['fshifts_correct'])).time(timestamp)
+                write_api.write(self.bucket,self.org, delay_state)
+                delay_state = Point("delay_state").tag("ant",ant).field("delay_correct",int(all(state['delay_correct']))).time(timestamp)
+                write_api.write(self.bucket,self.org, delay_state)
+                delay_state = Point("delay_state").tag("ant",ant).field("phase_correct",int(all(state['phase_correct']))).time(timestamp)
+                write_api.write(self.bucket,self.org, delay_state)
 
-            for stream in range(4):
-                value = Point("delay_values").tag("ant",ant).tag("stream",stream).field("firmware_delay_ns",state['firmware_delay_ns'][stream]).time(timestamp)
-                write_api.write(self.bucket,self.org, value)
-                value = Point("delay_values").tag("ant",ant).tag("stream",stream).field("expected_delay_ns",state['expected_delay_ns'][stream]).time(timestamp)
-                write_api.write(self.bucket,self.org, value)
-                value = Point("delay_values").tag("ant",ant).tag("stream",stream).field("firmware_phase_rad",state['firmware_phase_rad'][stream]).time(timestamp)
-                write_api.write(self.bucket,self.org, value)
-                value = Point("delay_values").tag("ant",ant).tag("stream",stream).field("expected_phase_rad",state['expected_phase_rad'][stream]).time(timestamp)
-                write_api.write(self.bucket,self.org, value)
-                value = Point("delay_values").tag("ant",ant).tag("stream",stream).field("loaded_fshift_hz",state['loaded_fshift_hz'][stream]).time(timestamp)
-                write_api.write(self.bucket,self.org, value)
-                value = Point("delay_values").tag("ant",ant).tag("stream",stream).field("expected_fshift_hz",state['expected_fshift_hz'][stream]).time(timestamp)
-                write_api.write(self.bucket,self.org, value)
-                    
-            for tune in range(2):
-                value = Point("tune_values").tag("ant",ant).tag("tune",tune).field("current_sslo",state['current_sslo'][tune]).time(timestamp)
-                write_api.write(self.bucket,self.org, value)
-                value = Point("tune_values").tag("ant",ant).tag("tune",tune).field("current_sideband",state['current_sideband'][tune]).time(timestamp)
-                write_api.write(self.bucket,self.org, value)
+                for stream in range(4):
+                    value = Point("delay_values").tag("ant",ant).tag("stream",stream).field("firmware_delay_ns",state['firmware_delay_ns'][stream]).time(timestamp)
+                    write_api.write(self.bucket,self.org, value)
+                    value = Point("delay_values").tag("ant",ant).tag("stream",stream).field("expected_delay_ns",state['expected_delay_ns'][stream]).time(timestamp)
+                    write_api.write(self.bucket,self.org, value)
+                    value = Point("delay_values").tag("ant",ant).tag("stream",stream).field("firmware_phase_rad",state['firmware_phase_rad'][stream]).time(timestamp)
+                    write_api.write(self.bucket,self.org, value)
+                    value = Point("delay_values").tag("ant",ant).tag("stream",stream).field("expected_phase_rad",state['expected_phase_rad'][stream]).time(timestamp)
+                    write_api.write(self.bucket,self.org, value)
+                    value = Point("delay_values").tag("ant",ant).tag("stream",stream).field("loaded_fshift_hz",state['loaded_fshift_hz'][stream]).time(timestamp)
+                    write_api.write(self.bucket,self.org, value)
+                    value = Point("delay_values").tag("ant",ant).tag("stream",stream).field("expected_fshift_hz",state['expected_fshift_hz'][stream]).time(timestamp)
+                    write_api.write(self.bucket,self.org, value)
+                        
+                for tune in range(2):
+                    value = Point("tune_values").tag("ant",ant).tag("tune",tune).field("current_sslo",state['current_sslo'][tune]).time(timestamp)
+                    write_api.write(self.bucket,self.org, value)
+                    value = Point("tune_values").tag("ant",ant).tag("tune",tune).field("current_sideband",state['current_sideband'][tune]).time(timestamp)
+                    write_api.write(self.bucket,self.org, value)
                 
     def run(self):
         """
