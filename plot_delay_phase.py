@@ -206,7 +206,7 @@ def plot_gain_phase(ant_to_gains, observation_frequencies, frequency_indices, fi
 
     fig.suptitle(f"Recorded Phase vs Freq from\n {outfilestem}\nfor source {source_name} and  tuning AC")
     fig.supylabel("Phase (degrees)")
-    fig.supxlabel("Frequency Channels")
+    fig.supxlabel("Frequency (MHz)")
 
     if outfilestem is not None:
         outfile_name = outfilestem+"recorded_phaseAC_vs_antennas.png"
@@ -256,7 +256,7 @@ def plot_gain_phase(ant_to_gains, observation_frequencies, frequency_indices, fi
 
     fig.suptitle(f"Recorded Phase vs Freq from\n {outfilestem}\nfor source {source_name} and tuning BD")
     fig.supylabel("Phase (degrees)")
-    fig.supxlabel("Frequency Channels")
+    fig.supxlabel("Frequency (MHz)")
 
     if outfilestem is not None:
         outfile_name = outfilestem+"recorded_phaseBD_vs_antennas.png"
@@ -329,7 +329,7 @@ def plot_gain_amplitude(ant_to_gains, observation_frequencies, frequency_indices
 
     fig.suptitle(f"Recorded Amplitude vs Freq from\n {outfilestem}\nfor source {source_name} and  tuning AC")
     fig.supylabel("|Gains|")
-    fig.supxlabel("Frequency Channels")
+    fig.supxlabel("Frequency (MHz)")
 
     if outfilestem is not None:
         outfile_name = outfilestem+"recorded_amplitudeAC_vs_antennas.png"
@@ -376,7 +376,7 @@ def plot_gain_amplitude(ant_to_gains, observation_frequencies, frequency_indices
 
     fig.suptitle(f"Recorded Amplitude vs Freq from\n {outfilestem}\nfor source {source_name} and tuning BD")
     fig.supylabel("|Gains|")
-    fig.supxlabel("Frequency Channels")
+    fig.supxlabel("Frequency (MHz)")
 
     if outfilestem is not None:
         outfile_name = outfilestem+"recorded_amplitudeBD_vs_antennas.png"
@@ -496,7 +496,7 @@ def plot_delay_phase(residual_delays_dict, phase_dict, frequency_matrix, outdir=
     
     fig.suptitle(f"Calculated Phase Calibration Coefficients vs Freq from\n{outfilestem}\nfor source {source_name} and tuning AC")
     fig.supylabel("Phase (degrees)")
-    fig.supxlabel("Frequency Channels")
+    fig.supxlabel("Frequency (MHz)")
 
     if outfilestem is not None:
         outfile_name = outfilestem+"phaseAC_vs_antennas.png"
@@ -524,7 +524,7 @@ def plot_delay_phase(residual_delays_dict, phase_dict, frequency_matrix, outdir=
             
     fig.suptitle(f"Calculated Phase Calibration Coefficients vs Freq from\n{outfilestem}\nfor source {source_name} and tuning BD")
     fig.supylabel("Phase (degrees)")
-    fig.supxlabel("Frequency Channels")
+    fig.supxlabel("Frequency (MHz)")
 
     if outfilestem is not None:
         outfile_name = outfilestem+"phaseBD_vs_antennas.png"
