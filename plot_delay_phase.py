@@ -47,8 +47,8 @@ def plot_gain_grade(ant_to_grade, freq_to_grade, outdir=None, outfilestem=None,
     for row in range(nof_streams):
         ax[1].plot(np.arange(nof_frequencies), freq_to_grade[row, :], '.', color = colorlist[row])
 
-    ax[0].legend(["AC0","AC1","BD0","BD1"], loc = 'upper right')
-    ax[1].legend(["AC0","AC1","BD0","BD1"], loc = 'upper right')
+    ax[0].legend(["A","C","B","D"], loc = 'upper right')
+    ax[1].legend(["A","C","B","D"], loc = 'upper right')
     ax[0].set_ylabel("abs(sum(gains_f))/sum(abs(gains_f))")
     ax[1].set_ylabel("abs(sum(gains_a))/sum(abs(gains_a))")
     ax[0].set_xticks(np.arange(len(antennas)))
@@ -117,9 +117,9 @@ def plot_snr_and_phase_spread(ant_to_snr, ant_to_sigma_phase, outdir=None, outfi
     ax[0].set_title("IFFT delay peak SNR")
     ax[1].set_title("Standard deviation of phase calibration values")
 
-    ax[0].legend(["AC0","AC1","BD0","BD1"], loc = 'upper right')
+    ax[0].legend(["A","C","B","D"], loc = 'upper right')
     ax[0].set_ylabel("SNR")
-    ax[1].legend(["AC0","AC1","BD0","BD1"],loc = 'upper right')
+    ax[1].legend(["A","C","B","D"],loc = 'upper right')
     ax[1].set_ylabel("Std deviation of phase cals")
     ax[0].set_xticks(np.arange(len(antennas)))
     ax[0].set_xticklabels(antennas)
@@ -174,6 +174,9 @@ def plot_gain_phase(ant_to_gains, observation_frequencies, frequency_indices, fi
     grid_y = 5
     fig, axs = plt.subplots(grid_x, grid_y, sharex  = True, sharey = True, constrained_layout=True, figsize = (12,14))
 
+    #Make observation frequencies in GHz
+    observation_frequencies = observation_frequencies/1e9
+
     #Tuning 0
     uncollected_gains = np.delete(np.arange(observation_frequencies[0,:].size), frequency_indices[0])
     for i in range(grid_x):
@@ -187,7 +190,7 @@ def plot_gain_phase(ant_to_gains, observation_frequencies, frequency_indices, fi
                     phases_pol1 = np.unwrap(phases_pol1)
                 axs[i,j].plot(
                     observation_frequencies[0,frequency_indices[0]], phases_pol0[frequency_indices[0]],
-                      '.',  label = "AC0"
+                      '.',  label = "A"
                     )
                 axs[i,j].plot(
                     observation_frequencies[0,uncollected_gains], phases_pol0[uncollected_gains],
@@ -195,18 +198,18 @@ def plot_gain_phase(ant_to_gains, observation_frequencies, frequency_indices, fi
                       )
                 axs[i,j].plot(
                     observation_frequencies[0,frequency_indices[0]], phases_pol1[frequency_indices[0]],
-                      '.',  label = "AC1"
+                      '.',  label = "C"
                       )
                 axs[i,j].plot(
                     observation_frequencies[0,uncollected_gains], phases_pol1[uncollected_gains],
                       '.', color='grey'
                       )
-                axs[i,j].set_title(f"{antennas[ant_ind]}_AC")
+                axs[i,j].set_title(f"{antennas[ant_ind]}")
                 axs[i,j].legend(loc = 'upper right')
 
     fig.suptitle(f"Recorded Phase vs Freq from\n {outfilestem}\nfor source {source_name} and  tuning AC")
     fig.supylabel("Phase (degrees)")
-    fig.supxlabel("Frequency (MHz)")
+    fig.supxlabel("Frequency (GHz)")
 
     if outfilestem is not None:
         outfile_name = outfilestem+"recorded_phaseAC_vs_antennas.png"
@@ -237,7 +240,7 @@ def plot_gain_phase(ant_to_gains, observation_frequencies, frequency_indices, fi
 
                 axs[i,j].plot(
                     observation_frequencies[1,frequency_indices[1]], phases_pol0[frequency_indices[1]],
-                      '.',  label = "BD0"
+                      '.',  label = "B"
                     )
                 axs[i,j].plot(
                     observation_frequencies[1,uncollected_gains], phases_pol0[uncollected_gains],
@@ -245,18 +248,18 @@ def plot_gain_phase(ant_to_gains, observation_frequencies, frequency_indices, fi
                       )
                 axs[i,j].plot(
                     observation_frequencies[1,frequency_indices[1]], phases_pol1[frequency_indices[1]],
-                      '.',  label = "BD1"
+                      '.',  label = "D"
                       )
                 axs[i,j].plot(
                     observation_frequencies[1,uncollected_gains], phases_pol1[uncollected_gains],
                       '.', color='grey'
                       )
-                axs[i,j].set_title(f"{antennas[ant_ind]}_BD")
+                axs[i,j].set_title(f"{antennas[ant_ind]}")
                 axs[i,j].legend(loc = 'upper right')
 
     fig.suptitle(f"Recorded Phase vs Freq from\n {outfilestem}\nfor source {source_name} and tuning BD")
     fig.supylabel("Phase (degrees)")
-    fig.supxlabel("Frequency (MHz)")
+    fig.supxlabel("Frequency (GHz)")
 
     if outfilestem is not None:
         outfile_name = outfilestem+"recorded_phaseBD_vs_antennas.png"
@@ -300,6 +303,9 @@ def plot_gain_amplitude(ant_to_gains, observation_frequencies, frequency_indices
     grid_y = 5
     fig, axs = plt.subplots(grid_x, grid_y, sharex  = True, sharey = True, constrained_layout=True, figsize = (12,14))
 
+    #Make observation frequencies in GHz
+    observation_frequencies = observation_frequencies/1e9
+
     #Tuning 0
     uncollected_gains = np.delete(np.arange(observation_frequencies[0,:].size), frequency_indices[0])
     for i in range(grid_x):
@@ -310,7 +316,7 @@ def plot_gain_amplitude(ant_to_gains, observation_frequencies, frequency_indices
                 amp_pol1 = np.abs(ant_to_gains[antennas[ant_ind]][1])
                 axs[i,j].plot(
                     observation_frequencies[0,frequency_indices[0]], amp_pol0[frequency_indices[0]],
-                      '.',  label = "AC0"
+                      '.',  label = "A"
                     )
                 axs[i,j].plot(
                     observation_frequencies[0,uncollected_gains], amp_pol0[uncollected_gains],
@@ -318,18 +324,18 @@ def plot_gain_amplitude(ant_to_gains, observation_frequencies, frequency_indices
                       )
                 axs[i,j].plot(
                     observation_frequencies[0,frequency_indices[0]], amp_pol1[frequency_indices[0]],
-                      '.',  label = "AC1"
+                      '.',  label = "C"
                       )
                 axs[i,j].plot(
                     observation_frequencies[0,uncollected_gains], amp_pol1[uncollected_gains],
                       '.', color='grey'
                       )
-                axs[i,j].set_title(f"{antennas[ant_ind]}_AC")
+                axs[i,j].set_title(f"{antennas[ant_ind]}")
                 axs[i,j].legend(loc = 'upper right')
 
     fig.suptitle(f"Recorded Amplitude vs Freq from\n {outfilestem}\nfor source {source_name} and  tuning AC")
     fig.supylabel("|Gains|")
-    fig.supxlabel("Frequency (MHz)")
+    fig.supxlabel("Frequency (GHz)")
 
     if outfilestem is not None:
         outfile_name = outfilestem+"recorded_amplitudeAC_vs_antennas.png"
@@ -357,7 +363,7 @@ def plot_gain_amplitude(ant_to_gains, observation_frequencies, frequency_indices
 
                 axs[i,j].plot(
                     observation_frequencies[1,frequency_indices[1]], amp_pol0[frequency_indices[1]],
-                      '.',  label = "BD0"
+                      '.',  label = "B"
                     )
                 axs[i,j].plot(
                     observation_frequencies[1,uncollected_gains], amp_pol0[uncollected_gains],
@@ -365,18 +371,18 @@ def plot_gain_amplitude(ant_to_gains, observation_frequencies, frequency_indices
                       )
                 axs[i,j].plot(
                     observation_frequencies[1,frequency_indices[1]], amp_pol1[frequency_indices[1]],
-                      '.',  label = "BD1"
+                      '.',  label = "D"
                       )
                 axs[i,j].plot(
                     observation_frequencies[1,uncollected_gains], amp_pol1[uncollected_gains],
                       '.', color='grey'
                       )
-                axs[i,j].set_title(f"{antennas[ant_ind]}_BD")
+                axs[i,j].set_title(f"{antennas[ant_ind]}")
                 axs[i,j].legend(loc = 'upper right')
 
     fig.suptitle(f"Recorded Amplitude vs Freq from\n {outfilestem}\nfor source {source_name} and tuning BD")
     fig.supylabel("|Gains|")
-    fig.supxlabel("Frequency (MHz)")
+    fig.supxlabel("Frequency (GHz)")
 
     if outfilestem is not None:
         outfile_name = outfilestem+"recorded_amplitudeBD_vs_antennas.png"
@@ -446,10 +452,10 @@ def plot_delay_phase(residual_delays_dict, phase_dict, frequency_matrix, outdir=
     fig, ax = plt.subplots(2, 1, sharex = True, constrained_layout=True, figsize = (10,12))
 
     for i in range(2):
-        ax[i].plot(delay_dat[:,0], '.',  label = "AC0")
-        ax[i].plot(delay_dat[:,1], '.',  label = "AC1")
-        ax[i].plot(delay_dat[:,2], '.',  label = "BD0")
-        ax[i].plot(delay_dat[:,3], '.',  label = "BD1")
+        ax[i].plot(delay_dat[:,0], '.',  label = "A")
+        ax[i].plot(delay_dat[:,1], '.',  label = "C")
+        ax[i].plot(delay_dat[:,2], '.',  label = "B")
+        ax[i].plot(delay_dat[:,3], '.',  label = "D")
 
         ax[i].legend(loc = 'upper right')
         ax[i].set_xticks(np.arange(len(antennas)))
@@ -478,6 +484,9 @@ def plot_delay_phase(residual_delays_dict, phase_dict, frequency_matrix, outdir=
          
     plt.savefig(delay_file_path, dpi = 150)
     plt.close()
+
+    #Make observation frequencies in GHz
+    frequency_matrix = frequency_matrix/1e9
     
 
     #make a grid plot of phase vs freq for all antennas
@@ -489,14 +498,14 @@ def plot_delay_phase(residual_delays_dict, phase_dict, frequency_matrix, outdir=
         for j in range(grid_y):
             ant_ind = (i*grid_y)+j
             if ant_ind < len(antennas):
-                axs[i,j].plot(frequency_matrix[0,:], phase_dat[ant_ind,0,:], '.',  label = "AC0")
-                axs[i,j].plot(frequency_matrix[0,:], phase_dat[ant_ind,1,:], '.',  label = "AC1")
-                axs[i,j].set_title(f"{antennas[ant_ind]}_AC")
+                axs[i,j].plot(frequency_matrix[0,:], phase_dat[ant_ind,0,:], '.',  label = "A")
+                axs[i,j].plot(frequency_matrix[0,:], phase_dat[ant_ind,1,:], '.',  label = "C")
+                axs[i,j].set_title(f"{antennas[ant_ind]}")
                 axs[i,j].legend(loc = 'upper right')
     
     fig.suptitle(f"Calculated Phase Calibration Coefficients vs Freq from\n{outfilestem}\nfor source {source_name} and tuning AC")
     fig.supylabel("Phase (degrees)")
-    fig.supxlabel("Frequency (MHz)")
+    fig.supxlabel("Frequency (GHz)")
 
     if outfilestem is not None:
         outfile_name = outfilestem+"phaseAC_vs_antennas.png"
@@ -517,14 +526,14 @@ def plot_delay_phase(residual_delays_dict, phase_dict, frequency_matrix, outdir=
         for j in range(grid_y):
             ant_ind = (i*grid_y)+j
             if ant_ind < len(antennas):
-                axs[i,j].plot(frequency_matrix[1,:], phase_dat[ant_ind,2,:], '.',  label = "BD0")
-                axs[i,j].plot(frequency_matrix[1,:], phase_dat[ant_ind,3,:], '.',  label = "BD1")
-                axs[i,j].set_title(f"{antennas[ant_ind]}_BD")
+                axs[i,j].plot(frequency_matrix[1,:], phase_dat[ant_ind,2,:], '.',  label = "B")
+                axs[i,j].plot(frequency_matrix[1,:], phase_dat[ant_ind,3,:], '.',  label = "D")
+                axs[i,j].set_title(f"{antennas[ant_ind]}")
                 axs[i,j].legend(loc = 'upper right')
             
     fig.suptitle(f"Calculated Phase Calibration Coefficients vs Freq from\n{outfilestem}\nfor source {source_name} and tuning BD")
     fig.supylabel("Phase (degrees)")
-    fig.supxlabel("Frequency (MHz)")
+    fig.supxlabel("Frequency (GHz)")
 
     if outfilestem is not None:
         outfile_name = outfilestem+"phaseBD_vs_antennas.png"
