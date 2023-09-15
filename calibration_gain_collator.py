@@ -48,6 +48,7 @@ logger.addHandler(ch)
 logger.addHandler(fh)
 
 CONFIG_HASH = "CAL_configuration"
+LOG_HASH = "CAL_log"
 
 GPU_PHASES_REDIS_HASH = "GPU_calibrationPhases"
 GPU_GAINS_REDIS_HASH = "GPU_calibrationGains"
@@ -924,6 +925,13 @@ class CalibrationGainCollector():
                     self.log_and_post_slackmessage(f"""
                         Clearing redis hash: {GPU_GAINS_REDIS_HASH} contents in anticipation of next calibration run.
                         """,severity = "DEBUG")
+                    redis_publish_dict_to_hash(self.redis_obj,LOG_HASH,
+                    {
+                        "Timestamp"     : time.time(),
+                        "ObservationID" : obs_id,
+                        "Grade"         : full_grade,
+                        "FCent_MHz"     : fcents_mhz.tolist()
+                    })
             else:
                 self.log_and_post_slackmessage(f"""
                 Issue waiting on trigger from GPU nodes. Aborting calibration proces...
