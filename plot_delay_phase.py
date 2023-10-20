@@ -26,8 +26,12 @@ def plot_gain_grade(ant_to_grade, freq_to_grade, outdir=None, outfilestem=None,
         grade_file_path      : str filepath to the snr vs ant and sigma vs ant png plot    
     """
 
-    if outdir is not None and not os.path.exists(outdir):
-        os.makedirs(outdir)
+    if outdir is not None:
+        try:
+            os.makedirs(outdir, exist_ok=True)
+        except:
+            print(f"Unable to create directory {outdir}, plots generated will not be saved to file.")
+            return None
 
     #Getting the antenna info from the keys
     antennas = list(ant_to_grade.keys())
@@ -92,8 +96,13 @@ def plot_snr_and_phase_spread(ant_to_snr, ant_to_sigma_phase, outdir=None, outfi
         snr_and_sigma_file_path      : str filepath to the snr vs ant and sigma vs ant png plot
     """
 
-    if outdir is not None and not os.path.exists(outdir):
-        os.makedirs(outdir)
+    if outdir is not None:
+        try:
+            os.makedirs(outdir, exist_ok=True)
+        except:
+            print(f"Unable to create directory {outdir}, plots generated will not be saved to file.")
+            return None
+
 
     #Getting the antenna info from the keys
     antennas = list(ant_to_snr.keys())
@@ -162,8 +171,12 @@ def plot_gain_phase(ant_to_gains, observation_frequencies, frequency_indices, fi
         phase_file_path_ac : str filepath to the phase vs freq plot for ac tuning
         phase_file_path_bd : str filepath to the phase vs freq plot for bd tuning
     """
-    if outdir is not None and not os.path.exists(outdir):
-        os.makedirs(outdir)
+    if outdir is not None:
+        try:
+            os.makedirs(outdir, exist_ok=True)
+        except:
+            print(f"Unable to create directory {outdir}, plots generated will not be saved to file.")
+            return None, None
 
     #Getting the antenna info from the keys
     antennas = list(ant_to_gains.keys())
@@ -291,8 +304,12 @@ def plot_gain_amplitude(ant_to_gains, observation_frequencies, frequency_indices
         amplitude_file_path_ac : str filepath to the amplitude vs freq plot for ac tuning
         amplitude_file_path_bd : str filepath to the amplitude vs freq plot for bd tuning
     """
-    if outdir is not None and not os.path.exists(outdir):
-        os.makedirs(outdir)
+    if outdir is not None:
+        try:
+            os.makedirs(outdir, exist_ok=True)
+        except:
+            print(f"Unable to create directory {outdir}, plots generated will not be saved to file.")
+            return None, None
 
     #Getting the antenna info from the keys
     antennas = list(ant_to_gains.keys())
@@ -418,8 +435,12 @@ def plot_delay_phase(residual_delays_dict, phase_dict, frequency_matrix, outdir=
         phase_file_path_ac : str filepath to the phase vs freq plot for ac tuning
         phase_file_path_bd : str filepath to the phase vs freq plot for bd tuning
     """
-    if outdir is not None and not os.path.exists(outdir):
-        os.makedirs(outdir)
+    if outdir is not None:
+        try:
+            os.makedirs(outdir, exist_ok=True)
+        except:
+            print(f"Unable to create directory {outdir}, plots generated will not be saved to file.")
+            return None, None, None
 
     #Getting the antenna info from the keys
     antennas = list(residual_delays_dict.keys())
