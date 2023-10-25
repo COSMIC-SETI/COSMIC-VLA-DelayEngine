@@ -310,6 +310,7 @@ class CalibrationGainCollector():
         ants = list(calibration_gains[list(calibration_gains.keys())[0]]['gains'].keys())
 
         #Initialise some empty dicts and arrays for population during this process
+        flagged_frequencies = {}
         collected_frequencies = {0:[],1:[]}
         ant_tune_to_collected_gain = {}
         for ant,tuning_idx in itertools.product(ants, range(self.nof_tunings)):
@@ -324,6 +325,12 @@ class CalibrationGainCollector():
             self.log_and_post_slackmessage(f"Processing tuning {tune_idx}, start freq {start_freq}...", severity="DEBUG")
             obs_id_t = payload['obs_id']
             ref_ant_t = payload['ref_ant']
+            if payload['flagged_hz'] is not None:
+                for ant, frequencies in payload['flagged_hz'].items():
+                    if ant not in flagged_frequencies:
+                        flagged_frequencies[ant] = frequencies
+                    else:
+                        flagged_frequencies[ant].extend(frequencies)
             if obs_id is not None and obs_id_t != obs_id:
                 self.log_and_post_slackmessage(f"""
                     Skipping {start_freq_tune} payload from GPU node since it contains differing obs_id 
@@ -357,7 +364,7 @@ class CalibrationGainCollector():
 
             collected_frequencies[tune_idx] += payload['freqs_hz'] 
         
-        return ant_tune_to_collected_gain, collected_frequencies, ants, obs_id, ref_ant
+        return ant_tune_to_collected_gain, collected_frequencies, ants, obs_id, ref_ant, flagged_frequencies
 
     def correctly_place_residual_phases_and_delays(self, ant_tune_to_collected_gain, 
         collected_frequencies, full_observation_channel_frequencies):
@@ -490,7 +497,8 @@ class CalibrationGainCollector():
                 manual_operation = True
                 trigger = True
             if trigger:
-                self.configure_from_hash()
+                if not manual_operation:
+                    self.configure_from_hash()
                 self.log_and_post_slackmessage(f"""
                     Calibration process has been triggered and is starting.\n
                     Manual run = `{manual_operation}`, 
@@ -511,7 +519,7 @@ class CalibrationGainCollector():
 
                 #Start function that waits for hash_timeout before collecting redis hash.
                 try:
-                    ant_tune_to_collected_gains, collected_frequencies, self.ants, obs_id, ref_ant = self.collect_phases_for_hash_timeout(self.hash_timeout, manual_operation = manual_operation) 
+                    ant_tune_to_collected_gains, collected_frequencies, self.ants, obs_id, ref_ant, flagged_frequencies = self.collect_phases_for_hash_timeout(self.hash_timeout, manual_operation = manual_operation) 
                 except Exception as e:
                     self.log_and_post_slackmessage(f"""
                     The collection of calibration from GPU gains failed:
@@ -520,7 +528,10 @@ class CalibrationGainCollector():
                     if manual_operation:
                         return
                     continue
-                
+                if flagged_frequencies is not None:
+                    self.log_and_post_slackmessage(f"""
+                    Calibration process flagged the following frequencies (MHz) per antenna:
+                    {flagged_frequencies}""", severity="INFO", is_reply=True)
                 #Update output_dir to contain projid, dataset_id and obs_id
                 output_dir = self.user_output_dir if manual_operation else os.path.join(self.user_output_dir, self.projid, self.dataset, obs_id, "calibration")
                 try:
@@ -814,66 +825,69 @@ class CalibrationGainCollector():
                     exit(0)
                     
                 #-----------------------------COMMIT ENTITY TO DB-----------------------------#
-                try:
-                    with self.cosmicdb_engine.session() as session:
-                        select_criteria = {
-                            "scan_id": self.meta_obs["scanid"],
-                            "start": datetime.fromtimestamp(self.start_epoch_seconds),
-                        }
+                if self.cosmicdb_engine is not None:
+                    try:
+                        with self.cosmicdb_engine.session() as session:
+                            select_criteria = {
+                                "scan_id": self.meta_obs["scanid"],
+                                "start": datetime.fromtimestamp(self.start_epoch_seconds),
+                            }
+                            self.log_and_post_slackmessage(f"""
+                                Creating calibration entity for observation: {select_criteria}
+                                """, severity="INFO", is_reply=True
+                            )
+                            db_obs = self.cosmicdb_engine.select_entity(
+                                session, entities.CosmicDB_Observation, **select_criteria
+                            )
+
+                            assert db_obs, "No observation found."
+
+                            db_obscal = entities.CosmicDB_ObservationCalibration(
+                                observation_id=db_obs.id,
+
+                                reference_antenna_name=ref_ant,
+                                flagged_percentage=-1.0, #TODO
+                                overall_grade=full_grade,
+                                file_uri=output_dir
+                            )
+                            
+                            session.add(db_obscal)
+                            session.commit()
+                            # session.refresh(db_obscal)
+
+                            # stream_pol_tuning_map = [
+                            #     ("r", "AC"),
+                            #     ("l", "AC"),
+                            #     ("r", "BD"),
+                            #     ("l", "BD")
+                            # ]
+
+                            # for ant_name, gain_matrix in full_gains_map.items():
+                            #     for stream_idx in range(gain_matrix.shape[0]):
+                            #         stream, tuning = stream_pol_tuning_map[stream_idx]
+                            #         for chan_idx in range(gain_matrix.shape[1]):
+                            #             chan_freq_hz = full_observation_channel_frequencies_hz[stream_idx, chan_idx]
+                                        
+                            #             session.add(
+                            #                 CosmicDB_CalibrationGain(
+                            #                     calibration_id=db_obscal.id,
+                            #                     antenna_name=ant_name,
+                            #                     observation_id=db_obs.id,
+                            #                     tuning=tuning,
+                            #                     channel_frequency=chan_freq_hz,
+                            #                     gain_real=numpy.real(gain_matrix[stream_idx, chan_idx]),
+                            #                     gain_imag=numpy.imag(gain_matrix[stream_idx, chan_idx]),
+                            #                 )
+                            #             )
+
+                            # session.commit()
+                    except BaseException as err:
                         self.log_and_post_slackmessage(f"""
-                            Creating calibration entity for observation: {select_criteria}
-                            """, severity="INFO", is_reply=True
-                        )
-                        db_obs = self.cosmicdb_engine.select_entity(
-                            session, entities.CosmicDB_Observation, **select_criteria
-                        )
-
-                        assert db_obs, "No observation found."
-
-                        db_obscal = entities.CosmicDB_ObservationCalibration(
-                            observation_id=db_obs.id,
-
-                            reference_antenna_name=ref_ant,
-                            flagged_percentage=-1.0, #TODO
-                            overall_grade=full_grade,
-                            file_uri=output_dir
-                        )
-                        
-                        session.add(db_obscal)
-                        session.commit()
-                        # session.refresh(db_obscal)
-
-                        # stream_pol_tuning_map = [
-                        #     ("r", "AC"),
-                        #     ("l", "AC"),
-                        #     ("r", "BD"),
-                        #     ("l", "BD")
-                        # ]
-
-                        # for ant_name, gain_matrix in full_gains_map.items():
-                        #     for stream_idx in range(gain_matrix.shape[0]):
-                        #         stream, tuning = stream_pol_tuning_map[stream_idx]
-                        #         for chan_idx in range(gain_matrix.shape[1]):
-                        #             chan_freq_hz = full_observation_channel_frequencies_hz[stream_idx, chan_idx]
-                                    
-                        #             session.add(
-                        #                 CosmicDB_CalibrationGain(
-                        #                     calibration_id=db_obscal.id,
-                        #                     antenna_name=ant_name,
-                        #                     observation_id=db_obs.id,
-                        #                     tuning=tuning,
-                        #                     channel_frequency=chan_freq_hz,
-                        #                     gain_real=numpy.real(gain_matrix[stream_idx, chan_idx]),
-                        #                     gain_imag=numpy.imag(gain_matrix[stream_idx, chan_idx]),
-                        #                 )
-                        #             )
-
-                        # session.commit()
-                except BaseException as err:
-                    self.log_and_post_slackmessage(f"""
-                    Failed to post database entities: {traceback.format_exc()}
-                    """, severity = "WARNING", is_reply=True)
-
+                        Failed to post database entities: {traceback.format_exc()}
+                        """, severity = "WARNING", is_reply=True)
+                else:
+                    self.log_and_post_slackmessage(f"No cosmic database engine configuration provided. Not publishing results to database.",
+                    severity = "INFO", is_reply=True)
 
                 #-------------------------PLOT GENERATION AND SAVING-------------------------#
                 #Plot phase and delay residuals
