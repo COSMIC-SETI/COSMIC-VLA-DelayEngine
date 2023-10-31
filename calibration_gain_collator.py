@@ -620,7 +620,7 @@ class CalibrationGainCollector():
                                                                         source_name = self.source)
                 
                 if flagged_frequencies is not None:
-                    if tot_nof_flagged_channels_phase == tot_nof_flagged_channels_amp:
+                    if tot_nof_flagged_channels_phase != tot_nof_flagged_channels_amp:
                         self.log_and_post_slackmessage(f"""
                             Weirdness has occured - amplitude plotting and phase plotting count different flagged frequencies, counted:
                             {tot_nof_flagged_channels_amp}
