@@ -327,10 +327,11 @@ class CalibrationGainCollector():
             ref_ant_t = payload['ref_ant']
             if payload['flagged_hz'] is not None:
                 for ant, frequencies in payload['flagged_hz'].items():
-                    if ant not in flagged_frequencies:
-                        flagged_frequencies[ant] = frequencies
+                    ant_tune = ant+"_"+str(tune_idx)
+                    if ant_tune not in flagged_frequencies:
+                        flagged_frequencies[ant_tune] = frequencies
                     else:
-                        flagged_frequencies[ant].extend(frequencies)
+                        flagged_frequencies[ant_tune].extend(frequencies)
             if obs_id is not None and obs_id_t != obs_id:
                 self.log_and_post_slackmessage(f"""
                     Skipping {start_freq_tune} payload from GPU node since it contains differing obs_id 
@@ -528,10 +529,6 @@ class CalibrationGainCollector():
                     if manual_operation:
                         return
                     continue
-                if flagged_frequencies is not None:
-                    self.log_and_post_slackmessage(f"""
-                    Calibration process flagged the following frequencies (MHz) per antenna:
-                    {flagged_frequencies}""", severity="INFO", is_reply=True)
                 #Update output_dir to contain projid, dataset_id and obs_id
                 output_dir = self.user_output_dir if manual_operation else os.path.join(self.user_output_dir, self.projid, self.dataset, obs_id, "calibration")
                 try:
@@ -614,13 +611,26 @@ class CalibrationGainCollector():
                 Plotting phase and amplitude of the collected recorded gains...
                 """,severity="DEBUG")
 
-                phase_file_path_ac, phase_file_path_bd = plot_gain_phase(full_gains_map, full_observation_channel_frequencies_hz, frequency_indices, 
-                                                                        fit_method = self.fit_method,
+                phase_file_path_ac, phase_file_path_bd, tot_nof_flagged_channels_phase = plot_gain_phase(full_gains_map, full_observation_channel_frequencies_hz, frequency_indices, 
+                                                                        anttune_to_flagged_frequencies = flagged_frequencies,fit_method = self.fit_method,
                                                                         outdir = os.path.join(output_dir, "calibration_plots"), outfilestem=obs_id,
                                                                         source_name = self.source)
-                amplitude_file_path_ac, amplitude_file_path_bd = plot_gain_amplitude(full_gains_map, full_observation_channel_frequencies_hz, frequency_indices,
-                                                                        outdir = os.path.join(output_dir, "calibration_plots"), outfilestem=obs_id,
+                amplitude_file_path_ac, amplitude_file_path_bd, tot_nof_flagged_channels_amp = plot_gain_amplitude(full_gains_map, full_observation_channel_frequencies_hz, frequency_indices,
+                                                                        anttune_to_flagged_frequencies = flagged_frequencies, outdir = os.path.join(output_dir, "calibration_plots"), outfilestem=obs_id,
                                                                         source_name = self.source)
+                
+                if flagged_frequencies is not None:
+                    if tot_nof_flagged_channels_phase == tot_nof_flagged_channels_amp:
+                        self.log_and_post_slackmessage(f"""
+                            Weirdness has occured - amplitude plotting and phase plotting count different flagged frequencies, counted:
+                            {tot_nof_flagged_channels_amp}
+                            and
+                            {tot_nof_flagged_channels_phase}
+                            respectively.""",
+                            severity="WARNING", is_reply=True)
+                    else:
+                        self.log_and_post_slackmessage(f"""
+                        UVH5 Calibration process flagged {tot_nof_flagged_channels_phase} channels.""", severity="INFO", is_reply=True)
 
                 if phase_file_path_ac is not None and phase_file_path_bd is not None:
                     self.log_and_post_slackmessage(f"""
