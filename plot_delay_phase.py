@@ -153,8 +153,8 @@ def plot_snr_and_phase_spread(ant_to_snr, ant_to_sigma_phase, outdir=None, outfi
     plt.savefig(snr_and_sigma_file_path, dpi = 150)
     plt.close()
     return snr_and_sigma_file_path
-    
-def plot_gain_phase(ant_to_gains, observation_frequencies, frequency_indices, fit_method="linear", outdir=None, outfilestem=None, source_name=None):
+
+def plot_gain_phase(ant_to_gains, observation_frequencies, frequency_indices, anttune_to_flagged_frequencies = None, fit_method="linear", outdir=None, outfilestem=None, source_name=None):
     """
     Plot the phase of the received complex gain values per antenna. In the event that
     the fitting method is "linear", unwrap the phases, before plotting.
@@ -162,6 +162,7 @@ def plot_gain_phase(ant_to_gains, observation_frequencies, frequency_indices, fi
     Args:
         ant_to_gains : {<ant> : [[complex(gains_pol0_tune0)], [complex(gains_pol1_tune0)], [complex(gains_pol0_tune1)], [complex(gains_pol1_tune1)]], ...}
         observation_frequencies : list of dimension (n_tunings, nchans) in Hz
+        anttune_to_flagged_frequencies : dictionary of shape {<ant>_<tuneidx> : [frequency (Hz)...], ...} showing flagged frequencies (OPTIONAL)
         frequency_indices : frequency indices that decide which parts of the plot to make color
         fit_method : str indicating the fit method used in the calibration run
         outdir : str directory path to save the plots to
@@ -170,6 +171,7 @@ def plot_gain_phase(ant_to_gains, observation_frequencies, frequency_indices, fi
     Returns:
         phase_file_path_ac : str filepath to the phase vs freq plot for ac tuning
         phase_file_path_bd : str filepath to the phase vs freq plot for bd tuning
+        tot_nof_flagged_channels : int : Total flagged channels count across both tunings
     """
     if outdir is not None:
         try:
@@ -180,6 +182,7 @@ def plot_gain_phase(ant_to_gains, observation_frequencies, frequency_indices, fi
 
     #Getting the antenna info from the keys
     antennas = list(ant_to_gains.keys())
+    tot_nof_flagged_channels = 0
 
     #plotting the phases vs antennas
     #make a grid plot of phase vs freq for all antennas
@@ -217,6 +220,13 @@ def plot_gain_phase(ant_to_gains, observation_frequencies, frequency_indices, fi
                     observation_frequencies[0,uncollected_gains], phases_pol1[uncollected_gains],
                       '.', color='grey'
                       )
+                if anttune_to_flagged_frequencies is not None:
+                    anttune = antennas[ant_ind]+"_0"
+                    if anttune in anttune_to_flagged_frequencies:
+                        for freq in anttune_to_flagged_frequencies[anttune]:
+                            tot_nof_flagged_channels+=1
+                            freq = freq/1e9 + np.array([-0.5e-3,0.5e-3])
+                            axs[i,j].axvspan(freq[0], freq[1], color="red",alpha=0.3)
                 axs[i,j].set_title(f"{antennas[ant_ind]}")
                 axs[i,j].legend(loc = 'upper right')
 
@@ -267,6 +277,13 @@ def plot_gain_phase(ant_to_gains, observation_frequencies, frequency_indices, fi
                     observation_frequencies[1,uncollected_gains], phases_pol1[uncollected_gains],
                       '.', color='grey'
                       )
+                if anttune_to_flagged_frequencies is not None:
+                    anttune = antennas[ant_ind]+"_1"
+                    if anttune in anttune_to_flagged_frequencies:
+                        for freq in anttune_to_flagged_frequencies[anttune]:
+                            tot_nof_flagged_channels+=1
+                            freq = freq/1e9 + np.array([-0.5e-3,0.5e-3])
+                            axs[i,j].axvspan(freq[0], freq[1], color="red",alpha=0.3)
                 axs[i,j].set_title(f"{antennas[ant_ind]}")
                 axs[i,j].legend(loc = 'upper right')
 
@@ -287,9 +304,9 @@ def plot_gain_phase(ant_to_gains, observation_frequencies, frequency_indices, fi
     plt.savefig(phase_file_path_bd, dpi = 150)
     plt.close() 
 
-    return phase_file_path_ac, phase_file_path_bd
+    return phase_file_path_ac, phase_file_path_bd, tot_nof_flagged_channels
 
-def plot_gain_amplitude(ant_to_gains, observation_frequencies, frequency_indices, outdir=None, outfilestem=None, source_name=None):
+def plot_gain_amplitude(ant_to_gains, observation_frequencies, frequency_indices, anttune_to_flagged_frequencies = None, outdir=None, outfilestem=None, source_name=None):
     """
     Plot the amplitude of the received complex gain values per antenna.
 
@@ -297,12 +314,14 @@ def plot_gain_amplitude(ant_to_gains, observation_frequencies, frequency_indices
         ant_to_gains : {<ant> : [[complex(gains_pol0_tune0)], [complex(gains_pol1_tune0)], [complex(gains_pol0_tune1)], [complex(gains_pol1_tune1)]], ...}
         observation_frequencies : list of dimension (n_tunings, nchans) in Hz
         frequency_indices : frequency indices that decide which parts of the plot to make color
+        anttune_to_flagged_frequencies : dictionary of shape {<ant>_<tuneidx> : [frequency (Hz)...], ...} showing flagged frequencies (OPTIONAL)
         outdir : str directory path to save the plots to
         outfilestem : str filename stem to use
         source_name : str name of source to use in plot title
     Returns:
         amplitude_file_path_ac : str filepath to the amplitude vs freq plot for ac tuning
         amplitude_file_path_bd : str filepath to the amplitude vs freq plot for bd tuning
+        tot_nof_flagged_channels : int : Total flagged channels count across both tunings
     """
     if outdir is not None:
         try:
@@ -313,6 +332,7 @@ def plot_gain_amplitude(ant_to_gains, observation_frequencies, frequency_indices
 
     #Getting the antenna info from the keys
     antennas = list(ant_to_gains.keys())
+    tot_nof_flagged_channels = 0
 
     #plotting the phases vs antennas
     #make a grid plot of phase vs freq for all antennas
@@ -347,6 +367,13 @@ def plot_gain_amplitude(ant_to_gains, observation_frequencies, frequency_indices
                     observation_frequencies[0,uncollected_gains], amp_pol1[uncollected_gains],
                       '.', color='grey'
                       )
+                if anttune_to_flagged_frequencies is not None:
+                    anttune = antennas[ant_ind]+"_0"
+                    if anttune in anttune_to_flagged_frequencies:
+                        for freq in anttune_to_flagged_frequencies[anttune]:
+                            tot_nof_flagged_channels+=1
+                            freq = freq/1e9 + np.array([-0.5e-3,0.5e-3])
+                            axs[i,j].axvspan(freq[0], freq[1], color="red",alpha=0.3)
                 axs[i,j].set_title(f"{antennas[ant_ind]}")
                 axs[i,j].legend(loc = 'upper right')
 
@@ -394,6 +421,13 @@ def plot_gain_amplitude(ant_to_gains, observation_frequencies, frequency_indices
                     observation_frequencies[1,uncollected_gains], amp_pol1[uncollected_gains],
                       '.', color='grey'
                       )
+                if anttune_to_flagged_frequencies is not None:
+                    anttune = antennas[ant_ind]+"_1"
+                    if anttune in anttune_to_flagged_frequencies:
+                        for freq in anttune_to_flagged_frequencies[anttune]:
+                            tot_nof_flagged_channels+=1
+                            freq = freq/1e9 + np.array([-0.5e-3,0.5e-3])
+                            axs[i,j].axvspan(freq[0], freq[1], color="red",alpha=0.3)
                 axs[i,j].set_title(f"{antennas[ant_ind]}")
                 axs[i,j].legend(loc = 'upper right')
 
@@ -414,7 +448,7 @@ def plot_gain_amplitude(ant_to_gains, observation_frequencies, frequency_indices
     plt.savefig(amplitude_file_path_bd, dpi = 150)
     plt.close() 
 
-    return amplitude_file_path_ac, amplitude_file_path_bd
+    return amplitude_file_path_ac, amplitude_file_path_bd, tot_nof_flagged_channels
 
 def plot_delay_phase(residual_delays_dict, phase_dict, frequency_matrix, outdir=None, outfilestem=None,
                     source_name=None):
