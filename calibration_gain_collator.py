@@ -18,7 +18,7 @@ import pprint
 from calibration_residual_kernals import calc_residuals_from_polyfit, calc_residuals_from_ifft, calc_calibration_ant_grade, calc_calibration_freq_grade, calc_full_grade
 from cosmic.observations.slackbot import SlackBot
 from cosmic.redis_actions import redis_obj, redis_hget_keyvalues, redis_publish_dict_to_hash, redis_clear_hash_contents, redis_publish_service_pulse, redis_publish_dict_to_channel
-from plot_delay_phase import plot_delay_phase, plot_gain_phase, plot_gain_amplitude, plot_snr_and_phase_spread, plot_gain_grade
+from plot_delay_phase import plot_delay_phase, plot_gain_phase, plot_gain_amplitude, plot_snr_and_phase_spread, plot_gain_grade, plot_ant_to_num_flagged_frequencies
 
 from cosmic_database import entities
 from cosmic_database.engine import CosmicDB_Engine
@@ -296,6 +296,8 @@ class CalibrationGainCollector():
             - collected frequency dict of {tune: [n_collected_freqs], ...}
             - list[antnames in observation]
             - obs_id of observation used for received gains
+            - anttune_flagged_frequencies : dict of mapping antenna_tune : [flagged frequencies]
+            - ant_num_flagged_frequencies : dict of mapping antenna : num_flagged_frequencies
         """
         if manual_operation:
             calibration_gains = self.input_json_dict
@@ -310,7 +312,8 @@ class CalibrationGainCollector():
         ants = list(calibration_gains[list(calibration_gains.keys())[0]]['gains'].keys())
 
         #Initialise some empty dicts and arrays for population during this process
-        flagged_frequencies = {}
+        anttune_flagged_frequencies = {}
+        ant_num_flagged_frequencies = {}
         collected_frequencies = {0:[],1:[]}
         ant_tune_to_collected_gain = {}
         for ant,tuning_idx in itertools.product(ants, range(self.nof_tunings)):
@@ -328,10 +331,14 @@ class CalibrationGainCollector():
             if payload['flagged_hz'] is not None:
                 for ant, frequencies in payload['flagged_hz'].items():
                     ant_tune = ant+"_"+str(tune_idx)
-                    if ant_tune not in flagged_frequencies:
-                        flagged_frequencies[ant_tune] = frequencies
+                    if ant_tune not in anttune_flagged_frequencies:
+                        anttune_flagged_frequencies[ant_tune] = frequencies
                     else:
-                        flagged_frequencies[ant_tune].extend(frequencies)
+                        anttune_flagged_frequencies[ant_tune].extend(frequencies)
+                    if ant not in ant_num_flagged_frequencies:
+                        ant_num_flagged_frequencies[ant] = len(frequencies)
+                    else:
+                        ant_num_flagged_frequencies[ant] += len(frequencies)
             if obs_id is not None and obs_id_t != obs_id:
                 self.log_and_post_slackmessage(f"""
                     Skipping {start_freq_tune} payload from GPU node since it contains differing obs_id 
@@ -365,7 +372,7 @@ class CalibrationGainCollector():
 
             collected_frequencies[tune_idx] += payload['freqs_hz'] 
         
-        return ant_tune_to_collected_gain, collected_frequencies, ants, obs_id, ref_ant, flagged_frequencies
+        return ant_tune_to_collected_gain, collected_frequencies, ants, obs_id, ref_ant, anttune_flagged_frequencies, ant_num_flagged_frequencies
 
     def correctly_place_residual_phases_and_delays(self, ant_tune_to_collected_gain, 
         collected_frequencies, full_observation_channel_frequencies):
@@ -520,7 +527,7 @@ class CalibrationGainCollector():
 
                 #Start function that waits for hash_timeout before collecting redis hash.
                 try:
-                    ant_tune_to_collected_gains, collected_frequencies, self.ants, obs_id, ref_ant, flagged_frequencies = self.collect_phases_for_hash_timeout(self.hash_timeout, manual_operation = manual_operation) 
+                    ant_tune_to_collected_gains, collected_frequencies, self.ants, obs_id, ref_ant, flagged_frequencies, num_flagged_frequencies = self.collect_phases_for_hash_timeout(self.hash_timeout, manual_operation = manual_operation) 
                 except Exception as e:
                     self.log_and_post_slackmessage(f"""
                     The collection of calibration from GPU gains failed:
@@ -529,6 +536,7 @@ class CalibrationGainCollector():
                     if manual_operation:
                         return
                     continue
+
                 #Update output_dir to contain projid, dataset_id and obs_id
                 output_dir = self.user_output_dir if manual_operation else os.path.join(self.user_output_dir, self.projid, self.dataset, obs_id, "calibration")
                 try:
@@ -611,26 +619,13 @@ class CalibrationGainCollector():
                 Plotting phase and amplitude of the collected recorded gains...
                 """,severity="DEBUG")
 
-                phase_file_path_ac, phase_file_path_bd, tot_nof_flagged_channels_phase = plot_gain_phase(full_gains_map, full_observation_channel_frequencies_hz, frequency_indices, 
+                phase_file_path_ac, phase_file_path_bd = plot_gain_phase(full_gains_map, full_observation_channel_frequencies_hz, frequency_indices, 
                                                                         anttune_to_flagged_frequencies = flagged_frequencies,fit_method = self.fit_method,
                                                                         outdir = os.path.join(output_dir, "calibration_plots"), outfilestem=obs_id,
                                                                         source_name = self.source)
-                amplitude_file_path_ac, amplitude_file_path_bd, tot_nof_flagged_channels_amp = plot_gain_amplitude(full_gains_map, full_observation_channel_frequencies_hz, frequency_indices,
+                amplitude_file_path_ac, amplitude_file_path_bd = plot_gain_amplitude(full_gains_map, full_observation_channel_frequencies_hz, frequency_indices,
                                                                         anttune_to_flagged_frequencies = flagged_frequencies, outdir = os.path.join(output_dir, "calibration_plots"), outfilestem=obs_id,
                                                                         source_name = self.source)
-                
-                if flagged_frequencies is not None:
-                    if tot_nof_flagged_channels_phase != tot_nof_flagged_channels_amp:
-                        self.log_and_post_slackmessage(f"""
-                            Weirdness has occured - amplitude plotting and phase plotting count different flagged frequencies, counted:
-                            {tot_nof_flagged_channels_amp}
-                            and
-                            {tot_nof_flagged_channels_phase}
-                            respectively.""",
-                            severity="WARNING", is_reply=True)
-                    else:
-                        self.log_and_post_slackmessage(f"""
-                        UVH5 Calibration process flagged {tot_nof_flagged_channels_phase} channels.""", severity="INFO", is_reply=True)
 
                 if phase_file_path_ac is not None and phase_file_path_bd is not None:
                     self.log_and_post_slackmessage(f"""
@@ -663,7 +658,16 @@ class CalibrationGainCollector():
                                                 thread_ts = self.slack_message_ts)
                     except:
                         self.log_and_post_slackmessage("Unable to upload plots", severity="WARNING", is_reply=True)
-
+                
+                if num_flagged_frequencies:
+                    flag_freq_plot = plot_ant_to_num_flagged_frequencies(num_flagged_frequencies, outdir = os.path.join(output_dir, "calibration_plots"), outfilestem=obs_id,
+                                                                        source_name = self.source)
+                    try:
+                        self.slackbot.upload_file(flag_freq_plot, title =f"Flagged channel per antenna for\n`{obs_id}`",
+                                                thread_ts = self.slack_message_ts)
+                    except:
+                        self.log_and_post_slackmessage("Unable to upload plots", severity="WARNING", is_reply=True)
+                        
                 if not manual_operation:
                     fixed_phase_filepath = redis_hget_keyvalues(self.redis_obj, CALIBRATION_CACHE_HASH)["fixed_phase"]
                 else:

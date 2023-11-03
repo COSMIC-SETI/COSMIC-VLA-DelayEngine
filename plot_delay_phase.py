@@ -7,8 +7,57 @@ edited by Talon Myburgh.
 import os
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.ticker import MaxNLocator
 import json
 import argparse
+
+def plot_ant_to_num_flagged_frequencies(ant_to_num_flagged_frequencies, outdir=None, outfilestem=None, source_name=None):
+    """
+    Plot a bar chart of the number of the antenna to the number of flagged frequency channels detected in uvh5 gain calculation.
+    Args:
+        ant_to_num_flagged_frequencies : dict {antname : number of flagged frequency channels}
+        outdir : str directory path to save the plots to
+        outfilestem : str filename stem to use
+        source_name : str name of source to use in plot title
+    Returns:
+        flag_chan_file_path : str filepath to the antenna vs number of flagged channels bar chart
+    """
+    if outdir is not None:
+        try:
+            os.makedirs(outdir, exist_ok=True)
+        except:
+            print(f"Unable to create directory {outdir}, plots generated will not be saved to file.")
+            return None
+        
+    antnames = list(ant_to_num_flagged_frequencies.keys())
+    number_flagged_channels = list(ant_to_num_flagged_frequencies.values())
+
+    plt.figure(figsize=(10,7))
+    plt.bar(antnames, number_flagged_channels, color='black')
+    plt.xlabel('Antenna names')
+    plt.xticks(rotation=45)
+    plt.ylabel('Total number of flagged channels')
+    ax = plt.gca()
+    ax.yaxis.set_major_locator(MaxNLocator(integer=True))
+    plt.grid(True, linestyle='-', alpha=0.6)
+    plt.title(f"""
+    Total number of flagged channels detected per antenna
+    across all polarization/tunings for:
+    {outfilestem}
+    for source {source_name}""")
+
+    if outfilestem is not None:
+        outfile_name = outfilestem+"total_flagged_channels_plot.png"
+    else:
+        outfile_name = "total_flagged_channels_plot.png"
+
+    if outdir is not None:
+        flag_chan_file_path = os.path.join(outdir, outfile_name)
+    else:
+        flag_chan_file_path = outfile_name
+    plt.savefig(flag_chan_file_path, dpi = 150)
+    plt.close()
+    return flag_chan_file_path
 
 def plot_gain_grade(ant_to_grade, freq_to_grade, outdir=None, outfilestem=None,
                     source_name=None):
@@ -171,7 +220,6 @@ def plot_gain_phase(ant_to_gains, observation_frequencies, frequency_indices, an
     Returns:
         phase_file_path_ac : str filepath to the phase vs freq plot for ac tuning
         phase_file_path_bd : str filepath to the phase vs freq plot for bd tuning
-        tot_nof_flagged_channels : int : Total flagged channels count across both tunings
     """
     if outdir is not None:
         try:
@@ -182,7 +230,6 @@ def plot_gain_phase(ant_to_gains, observation_frequencies, frequency_indices, an
 
     #Getting the antenna info from the keys
     antennas = list(ant_to_gains.keys())
-    tot_nof_flagged_channels = 0
 
     #plotting the phases vs antennas
     #make a grid plot of phase vs freq for all antennas
@@ -224,7 +271,6 @@ def plot_gain_phase(ant_to_gains, observation_frequencies, frequency_indices, an
                     anttune = antennas[ant_ind]+"_0"
                     if anttune in anttune_to_flagged_frequencies:
                         for freq in anttune_to_flagged_frequencies[anttune]:
-                            tot_nof_flagged_channels+=1
                             freq = freq/1e9 + np.array([-0.5e-3,0.5e-3])
                             axs[i,j].axvspan(freq[0], freq[1], color="red",alpha=0.3)
                 axs[i,j].set_title(f"{antennas[ant_ind]}")
@@ -281,7 +327,6 @@ def plot_gain_phase(ant_to_gains, observation_frequencies, frequency_indices, an
                     anttune = antennas[ant_ind]+"_1"
                     if anttune in anttune_to_flagged_frequencies:
                         for freq in anttune_to_flagged_frequencies[anttune]:
-                            tot_nof_flagged_channels+=1
                             freq = freq/1e9 + np.array([-0.5e-3,0.5e-3])
                             axs[i,j].axvspan(freq[0], freq[1], color="red",alpha=0.3)
                 axs[i,j].set_title(f"{antennas[ant_ind]}")
@@ -304,7 +349,7 @@ def plot_gain_phase(ant_to_gains, observation_frequencies, frequency_indices, an
     plt.savefig(phase_file_path_bd, dpi = 150)
     plt.close() 
 
-    return phase_file_path_ac, phase_file_path_bd, tot_nof_flagged_channels
+    return phase_file_path_ac, phase_file_path_bd
 
 def plot_gain_amplitude(ant_to_gains, observation_frequencies, frequency_indices, anttune_to_flagged_frequencies = None, outdir=None, outfilestem=None, source_name=None):
     """
@@ -321,7 +366,6 @@ def plot_gain_amplitude(ant_to_gains, observation_frequencies, frequency_indices
     Returns:
         amplitude_file_path_ac : str filepath to the amplitude vs freq plot for ac tuning
         amplitude_file_path_bd : str filepath to the amplitude vs freq plot for bd tuning
-        tot_nof_flagged_channels : int : Total flagged channels count across both tunings
     """
     if outdir is not None:
         try:
@@ -332,7 +376,6 @@ def plot_gain_amplitude(ant_to_gains, observation_frequencies, frequency_indices
 
     #Getting the antenna info from the keys
     antennas = list(ant_to_gains.keys())
-    tot_nof_flagged_channels = 0
 
     #plotting the phases vs antennas
     #make a grid plot of phase vs freq for all antennas
@@ -371,7 +414,6 @@ def plot_gain_amplitude(ant_to_gains, observation_frequencies, frequency_indices
                     anttune = antennas[ant_ind]+"_0"
                     if anttune in anttune_to_flagged_frequencies:
                         for freq in anttune_to_flagged_frequencies[anttune]:
-                            tot_nof_flagged_channels+=1
                             freq = freq/1e9 + np.array([-0.5e-3,0.5e-3])
                             axs[i,j].axvspan(freq[0], freq[1], color="red",alpha=0.3)
                 axs[i,j].set_title(f"{antennas[ant_ind]}")
@@ -425,7 +467,6 @@ def plot_gain_amplitude(ant_to_gains, observation_frequencies, frequency_indices
                     anttune = antennas[ant_ind]+"_1"
                     if anttune in anttune_to_flagged_frequencies:
                         for freq in anttune_to_flagged_frequencies[anttune]:
-                            tot_nof_flagged_channels+=1
                             freq = freq/1e9 + np.array([-0.5e-3,0.5e-3])
                             axs[i,j].axvspan(freq[0], freq[1], color="red",alpha=0.3)
                 axs[i,j].set_title(f"{antennas[ant_ind]}")
@@ -448,7 +489,7 @@ def plot_gain_amplitude(ant_to_gains, observation_frequencies, frequency_indices
     plt.savefig(amplitude_file_path_bd, dpi = 150)
     plt.close() 
 
-    return amplitude_file_path_ac, amplitude_file_path_bd, tot_nof_flagged_channels
+    return amplitude_file_path_ac, amplitude_file_path_bd
 
 def plot_delay_phase(residual_delays_dict, phase_dict, frequency_matrix, outdir=None, outfilestem=None,
                     source_name=None):
