@@ -11,6 +11,13 @@ from matplotlib.ticker import MaxNLocator
 import json
 import argparse
 
+plt.rcParams["xtick.labelsize"]=12 # change the font size of x tick labels globally
+plt.rcParams["ytick.labelsize"]=12 # change the font size of y tick labels globally
+plt.rcParams["axes.labelsize"]=14 # change the font size of all text elements globally
+plt.rcParams['axes.titlesize']=16 # set the title font size to 20
+plt.rcParams['figure.titlesize']=18 # set the title font size to 20
+plt.rcParams['legend.fontsize']=14 # set the title font size to 20
+
 def plot_ant_to_num_flagged_frequencies(ant_to_num_flagged_frequencies, outdir=None, outfilestem=None, source_name=None):
     """
     Plot a bar chart of the number of the antenna to the number of flagged frequency channels detected in uvh5 gain calculation.
