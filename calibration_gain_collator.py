@@ -1035,8 +1035,6 @@ if __name__ == "__main__":
     parser.add_argument("--snr-threshold", type=float, default = 4.0, required=False, 
                         help="""The snr threshold above which the process will reject applying the calculated delay
                         and phase residual calibration values""")
-    parser.add_argument("--calc-grade-only", action="store_true", help="""If specified, process will not progress past deriving calibration
-                        gains and loading them to the database if the database environment key is set""")
     parser.add_argument('paths', nargs='*')
     parser.add_argument(
         "--cosmicdb-engine-configuration",
@@ -1046,9 +1044,11 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
+    manual_run = False
     input_json_dict = {}
 
     if len(args.paths) != 0:
+        manual_run = True
         for path in args.paths:
             if os.path.isfile(path):
                 with open(path, 'r') as f:
@@ -1087,12 +1087,14 @@ if __name__ == "__main__":
     #if input fixed delay and fixed phase files are provided, publish them to the filepath hash
     input_fixed_delays = args.fixed_delay_to_update    
     if input_fixed_delays is not None:
-        redis_publish_dict_to_hash(redis_obj, CALIBRATION_CACHE_HASH,{"fixed_delay":input_fixed_delays})
-        input_fixed_delays = None
+        if not  manual_run:
+            redis_publish_dict_to_hash(redis_obj, CALIBRATION_CACHE_HASH,{"fixed_delay":input_fixed_delays})
+            input_fixed_delays = None
     input_fixed_phases = args.fixed_phase_to_update
     if input_fixed_phases is not None:
-        redis_publish_dict_to_hash(redis_obj, CALIBRATION_CACHE_HASH,{"fixed_phase":input_fixed_phases})
-        input_fixed_phases = None
+        if not  manual_run:
+            redis_publish_dict_to_hash(redis_obj, CALIBRATION_CACHE_HASH,{"fixed_phase":input_fixed_phases})
+            input_fixed_phases = None
     
     output_dir = os.path.abspath(args.output_dir)
     if output_dir is not None:
