@@ -1035,7 +1035,9 @@ if __name__ == "__main__":
     parser.add_argument("--snr-threshold", type=float, default = 4.0, required=False, 
                         help="""The snr threshold above which the process will reject applying the calculated delay
                         and phase residual calibration values""")
-    parser.add_argument('file', type=argparse.FileType('r'), nargs='*')
+    parser.add_argument("--calc-grade-only", action="store_true", help="""If specified, process will not progress past deriving calibration
+                        gains and loading them to the database if the database environment key is set""")
+    parser.add_argument('paths', nargs='*')
     parser.add_argument(
         "--cosmicdb-engine-configuration",
         type=str,
@@ -1043,13 +1045,21 @@ if __name__ == "__main__":
         help="The YAML file path specifying the COSMIC database.",
     )
     args = parser.parse_args()
-    manual_run = False
+
     input_json_dict = {}
-    if len(args.file) != 0:
-        for f in args.file:
-            input_json_dict.update(json.load(f))
-        args.dry_run = True
-        manual_run = True
+
+    if len(args.paths) != 0:
+        for path in args.paths:
+            if os.path.isfile(path):
+                with open(path, 'r') as f:
+                    input_json_dict.update(json.load(f))
+            elif os.path.isdir(path):
+                for root, dirs, files in os.walk(path):
+                    for file in files:
+                        if file.endswith('.json'):
+                            file_path = os.path.join(root, file)
+                            with open(file_path, 'r') as f:
+                                input_json_dict.update(json.load(f))
 
     #Logs contain traceback exceptions
     def exception_hook(*args):
@@ -1077,14 +1087,12 @@ if __name__ == "__main__":
     #if input fixed delay and fixed phase files are provided, publish them to the filepath hash
     input_fixed_delays = args.fixed_delay_to_update    
     if input_fixed_delays is not None:
-        if not manual_run:
-            redis_publish_dict_to_hash(redis_obj, CALIBRATION_CACHE_HASH,{"fixed_delay":input_fixed_delays})
-            input_fixed_delays = None
+        redis_publish_dict_to_hash(redis_obj, CALIBRATION_CACHE_HASH,{"fixed_delay":input_fixed_delays})
+        input_fixed_delays = None
     input_fixed_phases = args.fixed_phase_to_update
     if input_fixed_phases is not None:
-        if not  manual_run:
-            redis_publish_dict_to_hash(redis_obj, CALIBRATION_CACHE_HASH,{"fixed_phase":input_fixed_phases})
-            input_fixed_phases = None
+        redis_publish_dict_to_hash(redis_obj, CALIBRATION_CACHE_HASH,{"fixed_phase":input_fixed_phases})
+        input_fixed_phases = None
     
     output_dir = os.path.abspath(args.output_dir)
     if output_dir is not None:
