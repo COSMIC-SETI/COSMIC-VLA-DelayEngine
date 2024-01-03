@@ -858,9 +858,7 @@ class CalibrationGainCollector():
 
                             db_obscal = entities.CosmicDB_ObservationCalibration(
                                 observation_id=db_obs.id,
-
                                 reference_antenna_name=ref_ant,
-                                flagged_percentage=-1.0, #TODO
                                 overall_grade=full_grade,
                                 file_uri=output_dir
                             )
