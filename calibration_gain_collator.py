@@ -867,7 +867,31 @@ class CalibrationGainCollector():
                             
                             session.add(db_obscal)
                             session.commit()
-                            # session.refresh(db_obscal)
+
+                            if flagged_frequencies is not None: #only populate this table if flagged frequencies are present
+                                session.refresh(db_obscal) #refresh so that index resets
+                                tune_to_proc_frequencies = {
+                                    0 : len(collected_frequencies[0]),
+                                    1 : len(collected_frequencies[1])
+                                }
+
+                                #flagged_frequencies is dict : {antenna_tune : [flagged frequencies]}
+                                for anttune_name, flagged_freqs in flagged_frequencies.items():
+                                    ant, tune = anttune_name.split('_')
+                                    tune_idx = int(tune)
+                                    tuning = "BD" if tune_idx == 1 else "AC"
+
+                                    session.add(
+                                        entities.CosmicDB_AntennaCalibration(
+                                            calibration_id = db_obscal.id,
+                                            antenna_name = ant,
+                                            tuning = tuning,
+                                            coarse_channels_processed = tune_to_proc_frequencies[tune_idx],
+                                            coarse_channels_flagged_rfi = len(flagged_freqs)
+                                        )
+
+                                    )
+                                session.commit()
 
                             # stream_pol_tuning_map = [
                             #     ("r", "AC"),
