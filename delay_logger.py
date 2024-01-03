@@ -156,28 +156,28 @@ class DelayLogger:
                     write_api.write(self.bucket,self.org, delay_state)
                     delay_state = Point("delay_state").tag("ant",ant).field("phase_correct",int(all(state['phase_correct']))).time(timestamp)
                     write_api.write(self.bucket,self.org, delay_state)
+
+                    for stream in range(4):
+                        value = Point("delay_values").tag("ant",ant).tag("stream",stream).field("firmware_delay_ns",state['firmware_delay_ns'][stream]).time(timestamp)
+                        write_api.write(self.bucket,self.org, value)
+                        value = Point("delay_values").tag("ant",ant).tag("stream",stream).field("expected_delay_ns",state['expected_delay_ns'][stream]).time(timestamp)
+                        write_api.write(self.bucket,self.org, value)
+                        value = Point("delay_values").tag("ant",ant).tag("stream",stream).field("firmware_phase_rad",state['firmware_phase_rad'][stream]).time(timestamp)
+                        write_api.write(self.bucket,self.org, value)
+                        value = Point("delay_values").tag("ant",ant).tag("stream",stream).field("expected_phase_rad",state['expected_phase_rad'][stream]).time(timestamp)
+                        write_api.write(self.bucket,self.org, value)
+                        value = Point("delay_values").tag("ant",ant).tag("stream",stream).field("loaded_fshift_hz",state['loaded_fshift_hz'][stream]).time(timestamp)
+                        write_api.write(self.bucket,self.org, value)
+                        value = Point("delay_values").tag("ant",ant).tag("stream",stream).field("expected_fshift_hz",state['expected_fshift_hz'][stream]).time(timestamp)
+                        write_api.write(self.bucket,self.org, value)
+                            
+                    for tune in range(2):
+                        value = Point("tune_values").tag("ant",ant).tag("tune",tune).field("current_sslo",state['current_sslo'][tune]).time(timestamp)
+                        write_api.write(self.bucket,self.org, value)
+                        value = Point("tune_values").tag("ant",ant).tag("tune",tune).field("current_sideband",state['current_sideband'][tune]).time(timestamp)
+                        write_api.write(self.bucket,self.org, value)
                 except:
                     pass
-
-                for stream in range(4):
-                    value = Point("delay_values").tag("ant",ant).tag("stream",stream).field("firmware_delay_ns",state['firmware_delay_ns'][stream]).time(timestamp)
-                    write_api.write(self.bucket,self.org, value)
-                    value = Point("delay_values").tag("ant",ant).tag("stream",stream).field("expected_delay_ns",state['expected_delay_ns'][stream]).time(timestamp)
-                    write_api.write(self.bucket,self.org, value)
-                    value = Point("delay_values").tag("ant",ant).tag("stream",stream).field("firmware_phase_rad",state['firmware_phase_rad'][stream]).time(timestamp)
-                    write_api.write(self.bucket,self.org, value)
-                    value = Point("delay_values").tag("ant",ant).tag("stream",stream).field("expected_phase_rad",state['expected_phase_rad'][stream]).time(timestamp)
-                    write_api.write(self.bucket,self.org, value)
-                    value = Point("delay_values").tag("ant",ant).tag("stream",stream).field("loaded_fshift_hz",state['loaded_fshift_hz'][stream]).time(timestamp)
-                    write_api.write(self.bucket,self.org, value)
-                    value = Point("delay_values").tag("ant",ant).tag("stream",stream).field("expected_fshift_hz",state['expected_fshift_hz'][stream]).time(timestamp)
-                    write_api.write(self.bucket,self.org, value)
-                        
-                for tune in range(2):
-                    value = Point("tune_values").tag("ant",ant).tag("tune",tune).field("current_sslo",state['current_sslo'][tune]).time(timestamp)
-                    write_api.write(self.bucket,self.org, value)
-                    value = Point("tune_values").tag("ant",ant).tag("tune",tune).field("current_sideband",state['current_sideband'][tune]).time(timestamp)
-                    write_api.write(self.bucket,self.org, value)
                 
     def run(self):
         """
