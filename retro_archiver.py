@@ -1,9 +1,22 @@
 from pydantic import BaseModel
 import typing
+import logging
+from logging.handlers import WatchedFileHandler
 from enum import Enum
+from astropy.time import Time
 import argparse
 import re
 import os
+
+LOGFILENAME = "/home/cosmic/logs/CalibrationRetroArchival.log"
+logger = logging.getLogger('retro_archiver')
+logger.setLevel(logging.DEBUG)
+
+fh = WatchedFileHandler(LOGFILENAME, mode = 'a')
+fh.setLevel(logging.DEBUG)
+
+def UnixTimeFromModifiedJulianDate(jd):
+    return (jd-40587)*86400000
 
 class LoTuningName(str, Enum):
     AC = "AC"
@@ -20,8 +33,8 @@ class Extension(str, Enum):
 class FilenameParts(BaseModel):
     filename: str
     scan_project_name: str
-    mjd_day: int
-    mjd_seconds: int
+    mjd_day: str
+    mjd_seconds: str
     scan_no: int
     subscan_no: int
     tuning: LoTuningName
@@ -44,8 +57,8 @@ class FilenameParts(BaseModel):
         super().__init__(
             filename=filename,
             scan_project_name=m.group("scan_proj"),
-            mjd_day=int(m.group("mjdd")),
-            mjd_seconds=int(m.group("mjds")),
+            mjd_day=m.group("mjdd"),
+            mjd_seconds=m.group("mjds"),
             scan_no=int(m.group("scan_no")),
             subscan_no=int(m.group("subscan_no")),
             tuning=m.group("tuning"),
@@ -119,4 +132,13 @@ if __name__ == "__main__":
                 if os.path.isfile(os.path.join(root+ "/calibration/calibration_gains",item)) and item.endswith('.json'):
                     observation_details_from_json = FilenameParts(item)
                     break
+
+            mjd_time = Time(f"{observation_details_from_json.mjd_day}.{observation_details_from_json.mjd_seconds}",format='mjd')
+            
+            #TEMPORARY
+            sideband = '1 1'
+            tbin = '1e-6'
+            fcentmhz = '2477 3501'
+            collate_command = f"COSMIC_DB_TABLE_SUFFIX=_before_202304010 /home/cosmic/anaconda3/envs/cosmic_vla/bin/python3 /home/cosmic/dev/COSMIC-VLA-DelayEngine/calibration_gain_collator.py {root + '/calibration/calibration_gains'+'/*.json'} -o {root + '/calibration'} --no-slack-post --fcentmhz {fcentmhz} --sideband {sideband} --snr-threshold 4.0 --tbin {tbin}  --start-epoch-seconds {mjd_time.unix} --cosmicdb-engine-configuration /home/cosmic/conf/cosmicdb_conf.yaml --dry-run"
+            print(collate_command)
             
