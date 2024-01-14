@@ -62,7 +62,7 @@ CHANNEL_ORDER=[OBSERVATIONS_CHANNEL, SCAN_END_CHANNEL, GPU_GAINS_REDIS_CHANNEL]
 class CalibrationGainCollector():
     def __init__(self, redis_obj, fetch_config = False, user_output_dir='.', hash_timeout=20, re_arm_time = 30, fit_method = "fourier", dry_run = False,
     nof_streams = 4, nof_tunings = 2, nof_pols = 2, nof_channels = 1024, slackbot=None, input_fixed_delays = None, input_fixed_phases = None,
-    input_json_dict = None, input_fcents = None, input_sideband = None, input_tbin = None, snr_threshold = 4.0, cosmicdb_engine_url:str = None):
+    input_json_dict = None, input_fcents = None, input_sideband = None, input_tbin = None, start_epoch_seconds=None, snr_threshold = 4.0, cosmicdb_engine_url:str = None):
         self.redis_obj = redis_obj
         self.user_output_dir = user_output_dir
         self.hash_timeout = hash_timeout
@@ -77,6 +77,7 @@ class CalibrationGainCollector():
         self.fcents = input_fcents
         self.input_sideband = input_sideband
         self.tbin = input_tbin
+        self.start_epoch_seconds = start_epoch_seconds
         self.snr_threshold = snr_threshold
         self.nof_streams = nof_streams
         self.nof_channels = nof_channels
@@ -107,9 +108,9 @@ class CalibrationGainCollector():
             }
             redis_publish_dict_to_hash(self.redis_obj, CONFIG_HASH, config_dict) 
 
-        redis_clear_hash_contents(self.redis_obj, GPU_GAINS_REDIS_HASH)
         self.meta_obs = redis_hget_keyvalues(self.redis_obj, "META")
         if not self.dry_run:
+            redis_clear_hash_contents(self.redis_obj, GPU_GAINS_REDIS_HASH)
             fixed_value_filepaths = redis_hget_keyvalues(self.redis_obj, CALIBRATION_CACHE_HASH)
             #Publish the initial fixed delays and trigger the F-Engines to load them
             self.log_and_post_slackmessage(f"""
@@ -494,8 +495,9 @@ class CalibrationGainCollector():
 
     def start(self):
         while True:
-            #clear upfront incase bad calibration gains cause continuation of loop
-            redis_clear_hash_contents(self.redis_obj, GPU_GAINS_REDIS_HASH)
+            if not self.dry_run:
+                #clear upfront incase bad calibration gains cause continuation of loop
+                redis_clear_hash_contents(self.redis_obj, GPU_GAINS_REDIS_HASH)
             manual_operation = False
             #Launch function that waits for first valid message:
             if self.input_json_dict is None:
@@ -1054,6 +1056,7 @@ if __name__ == "__main__":
     parser.add_argument("--fcentmhz", nargs="*", default=[1000, 1001], help="""fcent values separated by space for observation""")
     parser.add_argument("--tbin", type=float, default=1e-6, required=False, help="""tbin value for observation in seconds""")
     parser.add_argument("--sideband", nargs="*", default=[1, 1], help="sideband values separated by space for observation")
+    parser.add_argument("--start-epoch-seconds", type=float, required=False, help ="""unix time of observation - only necessary for retroarchival""")
     parser.add_argument("--snr-threshold", type=float, default = 4.0, required=False, 
                         help="""The snr threshold above which the process will reject applying the calculated delay
                         and phase residual calibration values""")
@@ -1133,6 +1136,6 @@ if __name__ == "__main__":
     calibrationGainCollector = CalibrationGainCollector(redis_obj, fetch_config = args.run_as_service, user_output_dir = output_dir, hash_timeout = args.hash_timeout, dry_run = args.dry_run,
                                 re_arm_time = args.re_arm_time, fit_method = args.fit_method, slackbot = slackbot, input_fixed_delays = input_fixed_delays,
                                 input_fixed_phases = input_fixed_phases, input_json_dict = None if not bool(input_json_dict) else input_json_dict,
-                                input_fcents = args.fcentmhz, input_sideband = args.sideband, input_tbin = args.tbin, snr_threshold = args.snr_threshold,
+                                input_fcents = args.fcentmhz, input_sideband = args.sideband, input_tbin = args.tbin, start_epoch_seconds = args.start_epoch_seconds, snr_threshold = args.snr_threshold,
                                 cosmicdb_engine_url = cosmicdb_engine_url)
     calibrationGainCollector.start()
