@@ -3,6 +3,8 @@ import typing
 import logging
 from logging.handlers import WatchedFileHandler
 from enum import Enum
+import datetime
+import time
 from astropy.time import Time
 import argparse
 import re
@@ -134,11 +136,15 @@ if __name__ == "__main__":
                     break
 
             mjd_time = Time(f"{observation_details_from_json.mjd_day}.{observation_details_from_json.mjd_seconds}",format='mjd')
-            
+            t = datetime.datetime.strptime('Mon Apr 10 00:00:00 2023', "%a %b %d %H:%M:%S %Y")
+            db_env = ''
+            if mjd_time.unix < 1681084800.0:
+                db_env = 'COSMIC_DB_TABLE_SUFFIX=_before_202304010 '                
+
             #TEMPORARY
             sideband = '1 1'
             tbin = '1e-6'
             fcentmhz = '2477 3501'
-            collate_command = f"COSMIC_DB_TABLE_SUFFIX=_before_202304010 /home/cosmic/anaconda3/envs/cosmic_vla/bin/python3 /home/cosmic/dev/COSMIC-VLA-DelayEngine/calibration_gain_collator.py {root + '/calibration/calibration_gains'+'/*.json'} -o {root + '/calibration'} --no-slack-post --fcentmhz {fcentmhz} --sideband {sideband} --snr-threshold 4.0 --tbin {tbin}  --start-epoch-seconds {mjd_time.unix} --cosmicdb-engine-configuration /home/cosmic/conf/cosmicdb_conf.yaml --dry-run"
+            collate_command = f"{db_env}/home/cosmic/anaconda3/envs/cosmic_vla/bin/python3 /home/cosmic/dev/COSMIC-VLA-DelayEngine/calibration_gain_collator.py {root + '/calibration/calibration_gains'+'/*.json'} -o {root + '/calibration'} --no-slack-post --fcentmhz {fcentmhz} --sideband {sideband} --snr-threshold 4.0 --tbin {tbin}  --start-epoch-seconds {mjd_time.unix} --cosmicdb-engine-configuration /home/cosmic/conf/cosmicdb_conf.yaml --dry-run"
             print(collate_command)
             
