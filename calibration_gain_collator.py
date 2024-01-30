@@ -24,28 +24,7 @@ from cosmic_database import entities
 from cosmic_database.engine import CosmicDB_Engine
 from datetime import datetime
 
-LOGFILENAME = "/home/cosmic/logs/DelayCalibration.log"
-logger = logging.getLogger('calibration_delays')
-logger.setLevel(logging.DEBUG)
-
 SERVICE_NAME = os.path.splitext(os.path.basename(__file__))[0]
-
-# create console handler and set level to debug
-ch = logging.StreamHandler()
-ch.setLevel(logging.DEBUG)
-fh = RotatingFileHandler(LOGFILENAME, mode = 'a', maxBytes = 512, backupCount = 0, encoding = None, delay = False)
-fh.setLevel(logging.DEBUG)
-
-# create formatter
-formatter = logging.Formatter("[%(asctime)s - %(levelname)s - %(filename)s:%(lineno)s] %(message)s")
-
-# add formatter to ch
-ch.setFormatter(formatter)
-fh.setFormatter(formatter)
-
-# add ch to logger
-logger.addHandler(ch)
-logger.addHandler(fh)
 
 CONFIG_HASH = "CAL_configuration"
 LOG_HASH = "CAL_log"
@@ -61,14 +40,15 @@ CHANNEL_ORDER=[OBSERVATIONS_CHANNEL, SCAN_END_CHANNEL, GPU_GAINS_REDIS_CHANNEL]
 
 class CalibrationGainCollector():
     def __init__(self, redis_obj, fetch_config = False, user_output_dir='.', hash_timeout=20, re_arm_time = 30, fit_method = "fourier", dry_run = False,
-    nof_streams = 4, nof_tunings = 2, nof_pols = 2, nof_channels = 1024, slackbot=None, input_fixed_delays = None, input_fixed_phases = None,
-    input_json_dict = None, input_fcents = None, input_sideband = None, input_tbin = None, start_epoch_seconds=None, snr_threshold = 4.0, cosmicdb_engine_url:str = None):
+                 archive_mode = False, nof_streams = 4, nof_tunings = 2, nof_pols = 2, nof_channels = 1024, slackbot=None, input_fixed_delays = None, input_fixed_phases = None,
+                input_json_dict = None, input_fcents = None, input_sideband = None, input_tbin = None, start_epoch_seconds=None, snr_threshold = 4.0, cosmicdb_engine_url:str = None):
         self.redis_obj = redis_obj
         self.user_output_dir = user_output_dir
         self.hash_timeout = hash_timeout
         self.re_arm_time = re_arm_time
         self.fit_method = fit_method
         self.dry_run = dry_run
+        self.archive_mode = archive_mode
         self.slackbot = slackbot
         self.slack_message_ts = None
         self.input_fixed_delays = input_fixed_delays
@@ -106,7 +86,8 @@ class CalibrationGainCollector():
                 "input_fixed_phases":self.input_fixed_phases,
                 "snr_threshold":self.snr_threshold
             }
-            redis_publish_dict_to_hash(self.redis_obj, CONFIG_HASH, config_dict) 
+            if not self.dry_run:
+                redis_publish_dict_to_hash(self.redis_obj, CONFIG_HASH, config_dict) 
 
         self.meta_obs = redis_hget_keyvalues(self.redis_obj, "META")
         if not self.dry_run:
@@ -149,12 +130,7 @@ class CalibrationGainCollector():
         tuning = key_split[-1]
         tuning_index = self.basebands.index(tuning)
         start_freq = float(key_split[0])*1e6
-
         return tuning_index, start_freq
-
-    def update_antenna_phascals(self, ant_to_phasemap):
-        redis_publish_dict_to_hash(self.redis_obj, "META_calibrationPhases",ant_to_phasemap)
-        redis_publish_dict_to_channel(self.redis_obj, "update_calibration_phases", True)
     
     @staticmethod
     def dictnpy_to_dictlist(dictnpy):
@@ -621,94 +597,100 @@ class CalibrationGainCollector():
                 Plotting phase and amplitude of the collected recorded gains...
                 """,severity="DEBUG")
 
-                phase_file_path_ac, phase_file_path_bd = plot_gain_phase(full_gains_map, full_observation_channel_frequencies_hz, frequency_indices, 
-                                                                        anttune_to_flagged_frequencies = flagged_frequencies,fit_method = self.fit_method,
-                                                                        outdir = os.path.join(output_dir, "calibration_plots"), outfilestem=obs_id,
-                                                                        source_name = self.source)
-                amplitude_file_path_ac, amplitude_file_path_bd = plot_gain_amplitude(full_gains_map, full_observation_channel_frequencies_hz, frequency_indices,
-                                                                        anttune_to_flagged_frequencies = flagged_frequencies, outdir = os.path.join(output_dir, "calibration_plots"), outfilestem=obs_id,
-                                                                        source_name = self.source)
+                if not self.archive_mode:
+                    phase_file_path_ac, phase_file_path_bd = plot_gain_phase(full_gains_map, full_observation_channel_frequencies_hz, frequency_indices, 
+                                                                            anttune_to_flagged_frequencies = flagged_frequencies,fit_method = self.fit_method,
+                                                                            outdir = os.path.join(output_dir, "calibration_plots"), outfilestem=obs_id,
+                                                                            source_name = self.source)
+                    amplitude_file_path_ac, amplitude_file_path_bd = plot_gain_amplitude(full_gains_map, full_observation_channel_frequencies_hz, frequency_indices,
+                                                                            anttune_to_flagged_frequencies = flagged_frequencies, outdir = os.path.join(output_dir, "calibration_plots"), outfilestem=obs_id,
+                                                                            source_name = self.source)
 
-                if phase_file_path_ac is not None and phase_file_path_bd is not None:
-                    self.log_and_post_slackmessage(f"""
-                            Saved recorded gain phase for tuning AC to: 
-                            `{phase_file_path_ac}`
-                            and BD to:
-                            `{phase_file_path_bd}`
-                            """, severity = "DEBUG")
-                else:
-                    self.log_and_post_slackmessage("Unable to save/generate phase plots", severity="WARNING", is_reply=True)
-                if amplitude_file_path_ac is not None and amplitude_file_path_bd is not None:
-                    self.log_and_post_slackmessage(f"""
-                            Saved recorded gain amplitude for tuning AC to: 
-                            `{amplitude_file_path_ac}`
-                            and BD to:
-                            `{amplitude_file_path_bd}`
-                            """, severity = "DEBUG")
-                else:
-                    self.log_and_post_slackmessage("Unable to save/generate amplitude plots", severity="WARNING", is_reply=True)
+                    if phase_file_path_ac is not None and phase_file_path_bd is not None:
+                        self.log_and_post_slackmessage(f"""
+                                Saved recorded gain phase for tuning AC to: 
+                                `{phase_file_path_ac}`
+                                and BD to:
+                                `{phase_file_path_bd}`
+                                """, severity = "DEBUG")
+                    else:
+                        self.log_and_post_slackmessage("Unable to save/generate phase plots", severity="WARNING", is_reply=True)
+                    if amplitude_file_path_ac is not None and amplitude_file_path_bd is not None:
+                        self.log_and_post_slackmessage(f"""
+                                Saved recorded gain amplitude for tuning AC to: 
+                                `{amplitude_file_path_ac}`
+                                and BD to:
+                                `{amplitude_file_path_bd}`
+                                """, severity = "DEBUG")
+                    else:
+                        self.log_and_post_slackmessage("Unable to save/generate amplitude plots", severity="WARNING", is_reply=True)
                 
-                if self.slackbot is not None:
-                    try:
-                        self.slackbot.upload_file(phase_file_path_ac, title =f"Recorded phases (degrees) for tuning AC from\n`{obs_id}`",
-                                                thread_ts = self.slack_message_ts)
-                        self.slackbot.upload_file(phase_file_path_bd, title =f"Recorded phases (degrees) for tuning BD from\n`{obs_id}`",
-                                                thread_ts = self.slack_message_ts)
-                        self.slackbot.upload_file(amplitude_file_path_ac, title =f"Recorded amplitude for tuning AC from\n`{obs_id}`",
-                                                thread_ts = self.slack_message_ts)
-                        self.slackbot.upload_file(amplitude_file_path_bd, title =f"Recorded amplitude for tuning BD from\n`{obs_id}`",
-                                                thread_ts = self.slack_message_ts)
-                    except:
-                        self.log_and_post_slackmessage("Unable to upload plots", severity="WARNING", is_reply=True)
+                    if self.slackbot is not None:
+                        try:
+                            self.slackbot.upload_file(phase_file_path_ac, title =f"Recorded phases (degrees) for tuning AC from\n`{obs_id}`",
+                                                    thread_ts = self.slack_message_ts)
+                            self.slackbot.upload_file(phase_file_path_bd, title =f"Recorded phases (degrees) for tuning BD from\n`{obs_id}`",
+                                                    thread_ts = self.slack_message_ts)
+                            self.slackbot.upload_file(amplitude_file_path_ac, title =f"Recorded amplitude for tuning AC from\n`{obs_id}`",
+                                                    thread_ts = self.slack_message_ts)
+                            self.slackbot.upload_file(amplitude_file_path_bd, title =f"Recorded amplitude for tuning BD from\n`{obs_id}`",
+                                                    thread_ts = self.slack_message_ts)
+                        except:
+                            self.log_and_post_slackmessage("Unable to upload plots", severity="WARNING", is_reply=True)
                 
                 if num_flagged_frequencies:
-                    flag_freq_plot = plot_ant_to_num_flagged_frequencies(num_flagged_frequencies, outdir = os.path.join(output_dir, "calibration_plots"), outfilestem=obs_id,
-                                                                        source_name = self.source)
-                    try:
-                        self.slackbot.upload_file(flag_freq_plot, title =f"Flagged channel per antenna for\n`{obs_id}`",
-                                                thread_ts = self.slack_message_ts)
-                    except:
-                        self.log_and_post_slackmessage("Unable to upload plots", severity="WARNING", is_reply=True)
-                        
+                    if not self.archive_mode:
+                        flag_freq_plot = plot_ant_to_num_flagged_frequencies(num_flagged_frequencies, outdir = os.path.join(output_dir, "calibration_plots"), outfilestem=obs_id,
+                                                                            source_name = self.source)
+                        try:
+                            self.slackbot.upload_file(flag_freq_plot, title =f"Flagged channel per antenna for\n`{obs_id}`",
+                                                    thread_ts = self.slack_message_ts)
+                        except:
+                            self.log_and_post_slackmessage("Unable to upload plots", severity="WARNING", is_reply=True)
+
                 if not manual_operation:
                     fixed_phase_filepath = redis_hget_keyvalues(self.redis_obj, CALIBRATION_CACHE_HASH)["fixed_phase"]
                 else:
                     fixed_phase_filepath = self.input_fixed_phases
-                try:
-                    with open(fixed_phase_filepath, 'r') as f:
-                        last_fixed_phases = json.load(f)
-                except:
-                    self.log_and_post_slackmessage(f"""
-                        Could *not* read fixed phases from {fixed_phase_filepath} for updating with calculated residuals.
-                        Cleaning up and aborting calibration process...
-                    """, severity = "ERROR", is_reply= True)
-                    return
+
+                if not self.archive_mode:        
+                    try:
+                        with open(fixed_phase_filepath, 'r') as f:
+                            last_fixed_phases = json.load(f)
+                    except:
+                        self.log_and_post_slackmessage(f"""
+                            Could *not* read fixed phases from {fixed_phase_filepath} for updating with calculated residuals.
+                            Cleaning up and aborting calibration process...
+                        """, severity = "ERROR", is_reply= True)
+                        return
 
                 ant_to_grade = calc_calibration_ant_grade(full_gains_map)
                 freq_to_grade = calc_calibration_freq_grade(full_gains_map)
                 full_grade = calc_full_grade(full_gains_map)
-                grade_file_path = plot_gain_grade(ant_to_grade, freq_to_grade, outdir=os.path.join(output_dir ,"calibration_plots"), outfilestem=obs_id,
-                        source_name = self.source)
-                if grade_file_path is not None:
-                    self.log_and_post_slackmessage(f"""
-                            Saved calibration gain grade plot to: 
-                            `{grade_file_path}`
-                            """, severity = "DEBUG")
-                    if self.slackbot is not None:
-                        try:
-                            self.slackbot.upload_file(grade_file_path,
-                                                    title =f"Calibration gain grade from\n`{obs_id}`",
-                                                    thread_ts = self.slack_message_ts)
-                        except:
-                            self.log_and_post_slackmessage("Error uploading plots", severity="WARNING", is_reply=True)
-                else:
-                    self.log_and_post_slackmessage("Unable to save/generate gain grade plot", severity="WARNING", is_reply=True)
+                if not self.archive_mode:
+                    grade_file_path = plot_gain_grade(ant_to_grade, freq_to_grade, outdir=os.path.join(output_dir ,"calibration_plots"), outfilestem=obs_id,
+                            source_name = self.source)
+                    if grade_file_path is not None:
+                        self.log_and_post_slackmessage(f"""
+                                Saved calibration gain grade plot to: 
+                                `{grade_file_path}`
+                                """, severity = "DEBUG")
+                        if self.slackbot is not None:
+                            try:
+                                self.slackbot.upload_file(grade_file_path,
+                                                        title =f"Calibration gain grade from\n`{obs_id}`",
+                                                        thread_ts = self.slack_message_ts)
+                            except:
+                                self.log_and_post_slackmessage("Error uploading plots", severity="WARNING", is_reply=True)
+                    else:
+                        self.log_and_post_slackmessage("Unable to save/generate gain grade plot", severity="WARNING", is_reply=True)
 
                 self.log_and_post_slackmessage(f"""
                         Calculated overall grade for calibration recording of:
                         `{full_grade}`
                         """, severity = "INFO", is_reply=True)
-                redis_publish_dict_to_hash(self.redis_obj, CALIBRATION_CACHE_HASH, {"grade":full_grade})
+                if not self.dry_run:
+                    redis_publish_dict_to_hash(self.redis_obj, CALIBRATION_CACHE_HASH, {"grade":full_grade})
                 self.log_and_post_slackmessage(f"""
                 Subtracting fixed phases found in
                 ```{fixed_phase_filepath}```
@@ -716,129 +698,134 @@ class CalibrationGainCollector():
                 """, severity = "INFO", is_reply=True)
 
                 #-------------------------CALCULATE RESIDUAL DELAYS AND PHASES FOR COLLECTED GAINS-------------------------#
-                try:
-                    if self.fit_method == "linear":
-                        delay_residual_map, phase_cal_map = calc_residuals_from_polyfit(full_gains_map, full_observation_channel_frequencies_hz,
-                                                                                        last_fixed_phases, frequency_indices, snr_threshold = self.snr_threshold)
-                    elif self.fit_method == "fourier":
-                        delay_residual_map, phase_cal_map, snr_map, sigma_phase_map = calc_residuals_from_ifft(full_gains_map,full_observation_channel_frequencies_hz,
-                                                                                    last_fixed_phases, frequency_indices, sideband, snr_threshold = self.snr_threshold)
-                except Exception as e:
-                    self.log_and_post_slackmessage(f"""
-                    Exception encountered making a call to the calibration kernel:
-                    {e}
-                    Ignoring run and continuing...
-                    """, severity = "ERROR", is_reply=True)
-                    if manual_operation:
-                        return
-                    continue
+                if not self.archive_mode:
+                    try:
+                        if self.fit_method == "linear":
+                            delay_residual_map, phase_cal_map = calc_residuals_from_polyfit(full_gains_map, full_observation_channel_frequencies_hz,
+                                                                                            last_fixed_phases, frequency_indices, snr_threshold = self.snr_threshold)
+                        elif self.fit_method == "fourier":
+                            delay_residual_map, phase_cal_map, snr_map, sigma_phase_map = calc_residuals_from_ifft(full_gains_map,full_observation_channel_frequencies_hz,
+                                                                                        last_fixed_phases, frequency_indices, sideband, snr_threshold = self.snr_threshold)
+                    except Exception as e:
+                        self.log_and_post_slackmessage(f"""
+                        Exception encountered making a call to the calibration kernel:
+                        {e}
+                        Ignoring run and continuing...
+                        """, severity = "ERROR", is_reply=True)
+                        if manual_operation:
+                            return
+                        continue
 
                 #-------------------------SAVE RESIDUAL DELAYS-------------------------#
-                #For json dumping:
-                t_delay_dict = self.dictnpy_to_dictlist(delay_residual_map)
-
                 #log directory for calibration delay residuals
-                delay_residual_path = os.path.join(output_dir, "delay_residuals")
-                try:
-                    os.makedirs(delay_residual_path, exist_ok=True)
-                    delay_residual_filename = os.path.join(delay_residual_path, f"calibrationdelayresiduals_{obs_id}.json")
-                    with open(delay_residual_filename, 'w') as f:
-                        json.dump(t_delay_dict, f)
+                if not self.archive_mode:
+                    #For json dumping:
+                    t_delay_dict = self.dictnpy_to_dictlist(delay_residual_map)
+                    delay_residual_path = os.path.join(output_dir, "delay_residuals")
+                    try:
+                        os.makedirs(delay_residual_path, exist_ok=True)
+                        delay_residual_filename = os.path.join(delay_residual_path, f"calibrationdelayresiduals_{obs_id}.json")
+                        with open(delay_residual_filename, 'w') as f:
+                            json.dump(t_delay_dict, f)
+                        self.log_and_post_slackmessage(f"""
+                            Wrote out calculated *residual delays* to: 
+                            {delay_residual_filename}""", severity = "DEBUG")
+                    except:
+                        self.log_and_post_slackmessage(f"Unable to save residual delays to file `{delay_residual_filename}`", severity="WARNING", is_reply=True)
+
+                if not self.dry_run:
+                    redis_publish_dict_to_hash(self.redis_obj, "META_residualDelays", t_delay_dict)
+
+                if not self.archive_mode:
+                    pretty_print_json = pprint.pformat(json.dumps(t_delay_dict)).replace("'", '"')
                     self.log_and_post_slackmessage(f"""
-                        Wrote out calculated *residual delays* to: 
-                        {delay_residual_filename}""", severity = "DEBUG")
-                except:
-                    self.log_and_post_slackmessage(f"Unable to save residual delays to file `{delay_residual_filename}`", severity="WARNING", is_reply=True)
+                        Calculated the following delay residuals from UVH5 recording
+                        `{obs_id}`:
 
-                redis_publish_dict_to_hash(self.redis_obj, "META_residualDelays", t_delay_dict)
-
-                pretty_print_json = pprint.pformat(json.dumps(t_delay_dict)).replace("'", '"')
-                self.log_and_post_slackmessage(f"""
-                    Calculated the following delay residuals from UVH5 recording
-                    `{obs_id}`:
-
-                    ```{pretty_print_json}```
-                    """, severity = "INFO", is_reply=True)
+                        ```{pretty_print_json}```
+                        """, severity = "INFO", is_reply=True)
 
                 #-------------------------UPDATE THE FIXED DELAYS-------------------------#
                 if not manual_operation:
                     fixed_delay_filepath = redis_hget_keyvalues(self.redis_obj, CALIBRATION_CACHE_HASH)["fixed_delay"]
                 else:
                     fixed_delay_filepath = self.input_fixed_delays
-                try:
-                    fixed_delays = pd.read_csv(os.path.abspath(fixed_delay_filepath), names = ["IF0","IF1","IF2","IF3"],
-                            header=None, skiprows=1)
-                except:
-                    self.log_and_post_slackmessage(f"""
-                        Could *not* read fixed delays from {fixed_delay_filepath} for updating with calculated residuals.
-                        Clearning up and aborting calibration process...
-                    """, severity = "ERROR", is_reply=True)
-                    return
-                self.log_and_post_slackmessage(f"""
-                Modifying fixed-delays found in
-                ```{fixed_delay_filepath}```
-                with the *residual delays* calculated above in
-                ```{delay_residual_filename}```
-                """,severity="INFO", is_reply=True)
-                fixed_delays = fixed_delays.to_dict()
-                updated_fixed_delays = {}
-                for i, tune in enumerate(list(fixed_delays.keys())):
-                    sub_updated_fixed_delays = {}
-                    for ant, delay in fixed_delays[tune].items():
-                        if ant in delay_residual_map:
-                            sub_updated_fixed_delays[ant] = delay - delay_residual_map[ant][i]
-                        else:
-                            sub_updated_fixed_delays[ant] = delay
-                    updated_fixed_delays[tune] = sub_updated_fixed_delays
+                if not self.archive_mode:
+                    try:
+                        fixed_delays = pd.read_csv(os.path.abspath(fixed_delay_filepath), names = ["IF0","IF1","IF2","IF3"],
+                                header=None, skiprows=1)
+                    except:
+                        self.log_and_post_slackmessage(f"""
+                            Could *not* read fixed delays from {fixed_delay_filepath} for updating with calculated residuals.
+                            Clearning up and aborting calibration process...
+                        """, severity = "ERROR", is_reply=True)
+                        return
 
                 #bit of logic here to remove the previous filestem from the name.
-                fixed_delay_file_loc = os.path.join((output_dir), ("fixed_delays/"))
-                if '%' in fixed_delay_filepath:
-                    modified_fixed_delays_path = os.path.join(fixed_delay_file_loc, (os.path.splitext(os.path.basename(fixed_delay_filepath))[0].split('%')[1]+"%"+obs_id+".csv"))
-                    #if first time running
-                else:
-                    modified_fixed_delays_path = os.path.join(fixed_delay_file_loc, (os.path.splitext(os.path.basename(fixed_delay_filepath))[0]+"%"+obs_id+".csv"))
-                try:
-                    os.makedirs(fixed_delay_file_loc, exist_ok=True)
                     self.log_and_post_slackmessage(f"""
-                        Wrote out modified fixed delays to: 
-                        ```{modified_fixed_delays_path}```
-                        """, severity = "INFO", is_reply=True)
+                    Modifying fixed-delays found in
+                    ```{fixed_delay_filepath}```
+                    with the *residual delays* calculated above in
+                    ```{delay_residual_filename}```
+                    """,severity="INFO", is_reply=True)
+                    fixed_delays = fixed_delays.to_dict()
+                    updated_fixed_delays = {}
+                    for i, tune in enumerate(list(fixed_delays.keys())):
+                        sub_updated_fixed_delays = {}
+                        for ant, delay in fixed_delays[tune].items():
+                            if ant in delay_residual_map:
+                                sub_updated_fixed_delays[ant] = delay - delay_residual_map[ant][i]
+                            else:
+                                sub_updated_fixed_delays[ant] = delay
+                        updated_fixed_delays[tune] = sub_updated_fixed_delays
+                    fixed_delay_file_loc = os.path.join((output_dir), ("fixed_delays/"))
+                    if '%' in fixed_delay_filepath:
+                        modified_fixed_delays_path = os.path.join(fixed_delay_file_loc, (os.path.splitext(os.path.basename(fixed_delay_filepath))[0].split('%')[1]+"%"+obs_id+".csv"))
+                        #if first time running
+                    else:
+                        modified_fixed_delays_path = os.path.join(fixed_delay_file_loc, (os.path.splitext(os.path.basename(fixed_delay_filepath))[0]+"%"+obs_id+".csv"))
+                    try:
+                        os.makedirs(fixed_delay_file_loc, exist_ok=True)
+                        self.log_and_post_slackmessage(f"""
+                            Wrote out modified fixed delays to: 
+                            ```{modified_fixed_delays_path}```
+                            """, severity = "INFO", is_reply=True)
 
-                    df = pd.DataFrame.from_dict(updated_fixed_delays)
-                    df.to_csv(modified_fixed_delays_path)
-                    #Publish new fixed delays to FEngines:
-                    if not self.dry_run:
-                        self.log_and_post_slackmessage("""Updating fixed-delays on *all* antenna now...""", severity = "INFO", is_reply=True)
-                        load_delay_calibrations(modified_fixed_delays_path)
-                except:
-                    self.log_and_post_slackmessage(f"Unable to save fixed delays to file `{modified_fixed_delays_path}`.\nAborting run.",severity="ERROR", is_reply = False, update_message = True)
-                    exit(0)
+                        df = pd.DataFrame.from_dict(updated_fixed_delays)
+                        df.to_csv(modified_fixed_delays_path)
+                        #Publish new fixed delays to FEngines:
+                        if not self.dry_run:
+                            self.log_and_post_slackmessage("""Updating fixed-delays on *all* antenna now...""", severity = "INFO", is_reply=True)
+                            load_delay_calibrations(modified_fixed_delays_path)
+                    except:
+                        self.log_and_post_slackmessage(f"Unable to save fixed delays to file `{modified_fixed_delays_path}`.\nAborting run.",severity="ERROR", is_reply = False, update_message = True)
+                        exit(0)
                 
                 #-------------------------LOAD THE NEW FIXED PHASES-------------------------#
 
                 #bit of logic here to remove the previous filestem from the name.
-                fixed_phase_file_loc = os.path.join((output_dir), ("fixed_phases/"))
-                if '%' in fixed_phase_filepath:
-                    modified_fixed_phases_path = os.path.join(fixed_phase_file_loc, (os.path.splitext(os.path.basename(fixed_phase_filepath))[0].split('%')[1]+"%"+obs_id+".json"))   
-                #if first time running
-                else:
-                    modified_fixed_phases_path = os.path.join(fixed_phase_file_loc, (os.path.splitext(os.path.basename(fixed_phase_filepath))[0]+"%"+obs_id+".json"))
-                try:
-                    os.makedirs(fixed_phase_file_loc, exist_ok=True)
-                    t_phase_cal_map = self.dictnpy_to_dictlist(phase_cal_map)
-                    with open(modified_fixed_phases_path, 'w+') as f:
-                        json.dump(t_phase_cal_map, f)
-                    self.log_and_post_slackmessage(f"""
-                    Wrote out modified fixed phases to: 
-                    ```{modified_fixed_phases_path}```""", severity = "INFO", is_reply=True)
-                    # Update the fixed phases on the F-Engines and update the fixed_phase path
-                    if not self.dry_run:
-                        self.log_and_post_slackmessage("""Updating fixed-phases on *all* antenna now...""", severity = "INFO", is_reply=True)
-                        load_phase_calibrations(modified_fixed_phases_path)
-                except:
-                    self.log_and_post_slackmessage(f"Unable to save fixed phases to file `{modified_fixed_phases_path}`.\nAborting run.",severity="ERROR", is_reply = False, update_message = True)
-                    exit(0)
+                if not self.archive_mode:
+                    fixed_phase_file_loc = os.path.join((output_dir), ("fixed_phases/"))
+                    if '%' in fixed_phase_filepath:
+                        modified_fixed_phases_path = os.path.join(fixed_phase_file_loc, (os.path.splitext(os.path.basename(fixed_phase_filepath))[0].split('%')[1]+"%"+obs_id+".json"))   
+                    #if first time running
+                    else:
+                        modified_fixed_phases_path = os.path.join(fixed_phase_file_loc, (os.path.splitext(os.path.basename(fixed_phase_filepath))[0]+"%"+obs_id+".json"))
+                    try:
+                        os.makedirs(fixed_phase_file_loc, exist_ok=True)
+                        t_phase_cal_map = self.dictnpy_to_dictlist(phase_cal_map)
+                        with open(modified_fixed_phases_path, 'w+') as f:
+                            json.dump(t_phase_cal_map, f)
+                        self.log_and_post_slackmessage(f"""
+                        Wrote out modified fixed phases to: 
+                        ```{modified_fixed_phases_path}```""", severity = "INFO", is_reply=True)
+                        # Update the fixed phases on the F-Engines and update the fixed_phase path
+                        if not self.dry_run:
+                            self.log_and_post_slackmessage("""Updating fixed-phases on *all* antenna now...""", severity = "INFO", is_reply=True)
+                            load_phase_calibrations(modified_fixed_phases_path)
+                    except:
+                        self.log_and_post_slackmessage(f"Unable to save fixed phases to file `{modified_fixed_phases_path}`.\nAborting run.",severity="ERROR", is_reply = False, update_message = True)
+                        exit(0)
                     
                 #-----------------------------COMMIT ENTITY TO DB-----------------------------#
                 if self.cosmicdb_engine is not None:
@@ -929,55 +916,56 @@ class CalibrationGainCollector():
 
                 #-------------------------PLOT GENERATION AND SAVING-------------------------#
                 #Plot phase and delay residuals
-                delay_file_path, phase_file_path_ac, phase_file_path_bd = plot_delay_phase(delay_residual_map, phase_cal_map, 
-                        full_observation_channel_frequencies_hz, outdir = os.path.join(output_dir ,"calibration_plots"), outfilestem=obs_id,
-                        source_name = self.source)
-                if delay_file_path is not None and phase_file_path_ac is not None and phase_file_path_bd is not None:
-                    self.log_and_post_slackmessage(f"""
-                            Saved  residual delay plot to: 
-                            `{delay_file_path}`
-                            and phase plot to:
-                            `{phase_file_path_ac}`
-                            and
-                            `{phase_file_path_bd}`
-                            """, severity = "DEBUG")
+                if not self.archive_mode:
+                    delay_file_path, phase_file_path_ac, phase_file_path_bd = plot_delay_phase(delay_residual_map, phase_cal_map, 
+                            full_observation_channel_frequencies_hz, outdir = os.path.join(output_dir ,"calibration_plots"), outfilestem=obs_id,
+                            source_name = self.source)
+                    if delay_file_path is not None and phase_file_path_ac is not None and phase_file_path_bd is not None:
+                        self.log_and_post_slackmessage(f"""
+                                Saved  residual delay plot to: 
+                                `{delay_file_path}`
+                                and phase plot to:
+                                `{phase_file_path_ac}`
+                                and
+                                `{phase_file_path_bd}`
+                                """, severity = "DEBUG")
 
-                    if self.slackbot is not None:
-                        try:
-                            self.slackbot.upload_file(delay_file_path,
-                                                    title =f"Residual delays (ns) per antenna calculated from\n`{obs_id}`",
-                                                    thread_ts = self.slack_message_ts)
-                            self.slackbot.upload_file(phase_file_path_ac,
-                                                    title =f"Phases (degrees) per frequency (Hz) for tuning AC calculated from\n`{obs_id}`",
-                                                    thread_ts = self.slack_message_ts)
-                            self.slackbot.upload_file(phase_file_path_bd,
-                                                    title =f"Phases (degrees) per frequency (Hz) for tuning BD calculated from\n`{obs_id}`",
-                                                    thread_ts = self.slack_message_ts)
-                        except:
-                            self.log_and_post_slackmessage("Error uploading plots", severity="WARNING", is_reply=True)
-                else:
-                    self.log_and_post_slackmessage("Unable to save/generate delay/phase plots", severity="WARNING", is_reply=True)
+                        if self.slackbot is not None:
+                            try:
+                                self.slackbot.upload_file(delay_file_path,
+                                                        title =f"Residual delays (ns) per antenna calculated from\n`{obs_id}`",
+                                                        thread_ts = self.slack_message_ts)
+                                self.slackbot.upload_file(phase_file_path_ac,
+                                                        title =f"Phases (degrees) per frequency (Hz) for tuning AC calculated from\n`{obs_id}`",
+                                                        thread_ts = self.slack_message_ts)
+                                self.slackbot.upload_file(phase_file_path_bd,
+                                                        title =f"Phases (degrees) per frequency (Hz) for tuning BD calculated from\n`{obs_id}`",
+                                                        thread_ts = self.slack_message_ts)
+                            except:
+                                self.log_and_post_slackmessage("Error uploading plots", severity="WARNING", is_reply=True)
+                    else:
+                        self.log_and_post_slackmessage("Unable to save/generate delay/phase plots", severity="WARNING", is_reply=True)
 
-                
-                #Plot SNR of delay peak and std deviation of phases
-                snr_and_sigma_file_path = plot_snr_and_phase_spread(snr_map, sigma_phase_map, outdir = os.path.join(output_dir ,"calibration_plots"), outfilestem=obs_id,
-                        source_name = self.source)
-                
-                if snr_and_sigma_file_path is not None:
-                    self.log_and_post_slackmessage(f"""
-                            Saved  snr and phase spread plot to: 
-                            `{snr_and_sigma_file_path}`
-                            """, severity = "DEBUG")
-                    if self.slackbot is not None:
-                        try:
-                            self.slackbot.upload_file(snr_and_sigma_file_path,
-                                                    title =f"Delay peak SNR and std_deviation of phases from\n`{obs_id}`",
-                                                    thread_ts = self.slack_message_ts)
-                        except:
-                            self.log_and_post_slackmessage("Error uploading plots", severity="WARNING", is_reply=True)
+                    
+                    #Plot SNR of delay peak and std deviation of phases
+                    snr_and_sigma_file_path = plot_snr_and_phase_spread(snr_map, sigma_phase_map, outdir = os.path.join(output_dir ,"calibration_plots"), outfilestem=obs_id,
+                            source_name = self.source)
+                    
+                    if snr_and_sigma_file_path is not None:
+                        self.log_and_post_slackmessage(f"""
+                                Saved  snr and phase spread plot to: 
+                                `{snr_and_sigma_file_path}`
+                                """, severity = "DEBUG")
+                        if self.slackbot is not None:
+                            try:
+                                self.slackbot.upload_file(snr_and_sigma_file_path,
+                                                        title =f"Delay peak SNR and std_deviation of phases from\n`{obs_id}`",
+                                                        thread_ts = self.slack_message_ts)
+                            except:
+                                self.log_and_post_slackmessage("Error uploading plots", severity="WARNING", is_reply=True)
 
-                else:
-                    self.log_and_post_slackmessage("Unable to save/generate snr and sigma plot", severity="WARNING", is_reply=True)
+                    else:
+                        self.log_and_post_slackmessage("Unable to save/generate snr and sigma plot", severity="WARNING", is_reply=True)
 
                 #-------------------------FINISH OFF CALIBRATION RUN-------------------------#
                 if manual_operation:
@@ -1036,6 +1024,7 @@ if __name__ == "__main__":
     parser.add_argument("-s","--run-as-service", action="store_true",help="""If specified, all other arguments are ignored
     and the configuration set up is collected on each main loop from the configuration redis Hash. See 
     configure_calibration_process.py to set the hash contents for configuration.""")
+    parser.add_argument("--archive-mode", action="store_true", help="""For retroarchival purposes to save grade to database only""")
     parser.add_argument("--hash-timeout", type=float,default=10, required=False, help="""How long to wait for calibration 
     postprocessing to complete and update phases.""")
     parser.add_argument("--dry-run", action="store_true", help="""If run as a dry run, delay residuals and phases are 
@@ -1070,6 +1059,10 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     manual_run = False
+
+    if args.archive_mode:
+        args.dry_run = True
+
     input_json_dict = {}
 
     if len(args.paths) != 0:
@@ -1085,6 +1078,30 @@ if __name__ == "__main__":
                             file_path = os.path.join(root, file)
                             with open(file_path, 'r') as f:
                                 input_json_dict.update(json.load(f))
+    
+    if manual_run:
+        LOGFILENAME = "./tmp_DelayCalibration.log"
+    else:
+        LOGFILENAME = "/home/cosmic/logs/DelayCalibration.log"
+    
+    logger = logging.getLogger('calibration_delays')
+    logger.setLevel(logging.DEBUG)
+    # create console handler and set level to debug
+    ch = logging.StreamHandler()
+    ch.setLevel(logging.DEBUG)
+    fh = RotatingFileHandler(LOGFILENAME, mode = 'a', maxBytes = 512, backupCount = 0, encoding = None, delay = False)
+    fh.setLevel(logging.DEBUG)
+
+    # create formatter
+    formatter = logging.Formatter("[%(asctime)s - %(levelname)s - %(filename)s:%(lineno)s] %(message)s")
+
+    # add formatter to ch
+    ch.setFormatter(formatter)
+    fh.setFormatter(formatter)
+
+    # add ch to logger
+    logger.addHandler(ch)
+    logger.addHandler(fh)
 
     #Logs contain traceback exceptions
     def exception_hook(*args):
@@ -1134,7 +1151,7 @@ if __name__ == "__main__":
         cosmicdb_engine_url = CosmicDB_Engine._create_url(args.cosmicdb_engine_configuration)
 
     calibrationGainCollector = CalibrationGainCollector(redis_obj, fetch_config = args.run_as_service, user_output_dir = output_dir, hash_timeout = args.hash_timeout, dry_run = args.dry_run,
-                                re_arm_time = args.re_arm_time, fit_method = args.fit_method, slackbot = slackbot, input_fixed_delays = input_fixed_delays,
+                                archive_mode = args.archive_mode, re_arm_time = args.re_arm_time, fit_method = args.fit_method, slackbot = slackbot, input_fixed_delays = input_fixed_delays,
                                 input_fixed_phases = input_fixed_phases, input_json_dict = None if not bool(input_json_dict) else input_json_dict,
                                 input_fcents = args.fcentmhz, input_sideband = args.sideband, input_tbin = args.tbin, start_epoch_seconds = args.start_epoch_seconds, snr_threshold = args.snr_threshold,
                                 cosmicdb_engine_url = cosmicdb_engine_url)
