@@ -831,10 +831,16 @@ class CalibrationGainCollector():
                 if self.cosmicdb_engine is not None:
                     try:
                         with self.cosmicdb_engine.session() as session:
-                            select_criteria = {
-                                "scan_id": self.meta_obs["scanid"],
-                                "start": datetime.fromtimestamp(self.start_epoch_seconds),
-                            }
+                            if not self.archive_mode:   
+                                select_criteria = {
+                                    "scan_id": self.meta_obs["scanid"],
+                                    "start": datetime.fromtimestamp(self.start_epoch_seconds),
+                                }
+                            else:
+                                select_criteria = {
+                                    "scan_id": obs_id,
+                                    "start": datetime.fromtimestamp(self.start_epoch_seconds)
+                                }
                             self.log_and_post_slackmessage(f"""
                                 Creating calibration entity for observation: {select_criteria}
                                 """, severity="INFO", is_reply=True
@@ -910,6 +916,8 @@ class CalibrationGainCollector():
                         self.log_and_post_slackmessage(f"""
                         Failed to post database entities: {traceback.format_exc()}
                         """, severity = "WARNING", is_reply=True)
+                        if self.archive_mode:
+                            raise Exception("Failed to post database entities")
                 else:
                     self.log_and_post_slackmessage(f"No cosmic database engine configuration provided. Not publishing results to database.",
                     severity = "INFO", is_reply=True)
