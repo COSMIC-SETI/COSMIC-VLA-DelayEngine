@@ -264,11 +264,11 @@ if __name__ == "__main__":
                                 #We have calibration products but no gains, re-derive gains:
                                 logger.debug(f"Found calibration products in '{root}', but no calibration gains, re-deriving gains.")
                                 uvh5_command = f"/home/cosmic/anaconda3/envs/cosmic_vla/bin/python3 /home/cosmic/dev/COSMIC-VLA-CalibrationEngine/calibrate_uvh5.py {root} --gengain"
-                                try:
-                                    logger.debug(f"Executing:\n{uvh5_command}")
-                                    uvh5_process = subprocess.Popen(uvh5_command, shell=True)
-                                    uvh5_process.wait() 
-                                except subprocess.CalledProcessError:
+                            
+                                logger.debug(f"Executing:\n{uvh5_command}")
+                                uvh5_process = subprocess.Popen(uvh5_command, shell=True)
+                                exit_code = uvh5_process.wait() 
+                                if exit_code != 0:
                                     logger.error(f"Error executing:\n{uvh5_command}")
                                     csvwriter.writerow([timestamp, observation_name, False, "Error recreating gains, unable to proceed", root])
                                     continue
@@ -277,17 +277,16 @@ if __name__ == "__main__":
                             have_gains = checkForCalibrationGains(calibration_dir)
                             if not have_gains:
                                 logger.error(f"Re-derivation of calibration gains failed.")
-                                csvwriter.writerow([timestamp, observation_name, False, "Re-derivation of calibration gains failed. It is possibly a permissions or disk space error in writing out gains.", root])
+                                csvwriter.writerow([timestamp, observation_name, False, "Re-derivation of calibration gains failed. It is possibly a permissions or disk space error in writing out gains", root])
                                 continue
                             
-                            #By this point we have calibration products and calibration gains, proceed with collation:
-                            try:
-                                logger.debug(f"Re-collating for retroarchival. Executing:\n{collate_command}")
-                                collate_process = subprocess.Popen(collate_command, shell=True, env=env)
-                                collate_process.wait()
-                            except subprocess.CalledProcessError:
+                            #By this point we have calibration products and calibration gains, proceed with collation:                       
+                            logger.debug(f"Re-collating for retroarchival. Executing:\n{collate_command}")
+                            collate_process = subprocess.Popen(collate_command, shell=True, env=env)
+                            exit_code = collate_process.wait()
+                            if exit_code != 0:
                                 logger.error(f"Error executing:\n{collate_command}")
-                                csvwriter.writerow([timestamp, observation_name, False, "Could not collate gains and calculate grade.", root])
+                                csvwriter.writerow([timestamp, observation_name, False, f"Could not collate gains and calculate grade. This is likely due to observation not being present in Observation database", root])
                                 continue
 
                             #We have successfully collated gains:
