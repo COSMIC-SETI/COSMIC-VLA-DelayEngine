@@ -114,7 +114,7 @@ def checkUVH5Uniformity(files : list) -> str:
                 observation_name = fparts.observation_id
             elif fparts.observation_id != observation_name:
                 #We have mixed observation uvh5 files in here - log and continue:
-                logger.warn(f"Found mixed observation uvh5 files in directory.")
+                logger.warning(f"Found mixed observation uvh5 files in directory.")
                 return ''
         
     if observation_name is None:
@@ -155,9 +155,9 @@ def checkForCalibrationGains(calibration_dir: str) -> bool:
 
     return False
 
-def writeCalibrationCollationCommand(uvh5_ac: str, uvh5_bd: str) -> str:
+def writeCalibrationCollationCommand(uvh5_ac: str, uvh5_bd: str) -> (str, bool):
     """Given a uvh5 file of each tuning in the same root, derive a collation command and return it.
-    Return None if the command could not be derived."""
+    Return command and Ture if the command could be derived. Else return error message and False."""
     #read the uvh5 files:
     try:
         uv.read(uvh5_ac)
@@ -167,7 +167,7 @@ def writeCalibrationCollationCommand(uvh5_ac: str, uvh5_bd: str) -> str:
         sideband_ac = -1 if (fcentmhz_ac < 12000 and fcentmhz_ac > 8000) else 1
     except Exception as e:
         logger.error(f"Could not read uvh5 file '{uvh5_ac}' or extract required information: {e}")
-        return None
+        return f"Could not read uvh5 file '{uvh5_ac}' or extract required information: {e}", False
 
     try:
         uv.read(uvh5_bd)
@@ -175,9 +175,12 @@ def writeCalibrationCollationCommand(uvh5_ac: str, uvh5_bd: str) -> str:
         sideband_bd = -1 if (fcentmhz_bd < 12000 and fcentmhz_bd > 8000) else 1
     except Exception as e:
         logger.error(f"Could not read uvh5 file '{uvh5_bd}' or extract required information: {e}")
-        return None
+        return f"Could not read uvh5 file '{uvh5_bd}' or extract required information: {e}", False
     
     #derive database environment variable:
+    if start_epoch_seconds.unix > 1685810556.0: #we've already recorded gains from this point onwards, so ignore.
+        logger.info(f"Scan should have already been archived. Skipping...")
+        return f"Scan is newer than {time.ctime(1685810556.0)} and should have already been archived. Skipping...", False
     if start_epoch_seconds.unix < 1681084800.0:
         env['COSMIC_DB_TABLE_SUFFIX']='_pre_20230410'
     else:
@@ -187,12 +190,12 @@ def writeCalibrationCollationCommand(uvh5_ac: str, uvh5_bd: str) -> str:
     if os.path.dirname(uvh5_ac) == os.path.dirname(uvh5_bd):
         root = os.path.dirname(uvh5_ac)
     else:
-        logger.error(f"UVH5 files are not in the same directory.")
-        return None 
+        logger.error(f"Both tuning UVH5 files are not in the same directory.")
+        return f"UVH5 files are not in the same directory.", False
 
     #derive the command:
     collate_command = f"/home/cosmic/anaconda3/envs/cosmic_vla/bin/python3 /home/cosmic/dev/COSMIC-VLA-DelayEngine/calibration_gain_collator.py {root + '/calibration/calibration_gains'+'/*.json'} -o {root + '/calibration'} --no-slack-post --fcentmhz {fcentmhz_ac} {fcentmhz_bd} --sideband {sideband_ac} {sideband_bd} --snr-threshold 4.0 --tbin {tbin}  --start-epoch-seconds {start_epoch_seconds.unix} --cosmicdb-engine-configuration /home/cosmic/conf/cosmicdb_conf.yaml --dry-run --archive-mode"
-    return collate_command
+    return collate_command, True
 
 if __name__ == "__main__":
 
@@ -247,7 +250,12 @@ if __name__ == "__main__":
                             logger.error(f"Could not find uvh5 files for both tunings in '{root}'.")
                             csvwriter.writerow([timestamp, observation_name, False, "Could not find at least 1 UVH5 file for both tunings.", root])
                             continue
-                        collate_command = writeCalibrationCollationCommand(ac_file, bd_file)
+                        collate_command, status = writeCalibrationCollationCommand(ac_file, bd_file)
+
+                        if status == False:
+                            logger.warning(f"Error deriving collation command: {collate_command}")
+                            csvwriter.writerow([timestamp, observation_name, False, collate_command, root])
+                            continue
                             
                         if cal_products:
                             #We have calibration products and uvh5 files, check for calibration gains:
@@ -287,18 +295,18 @@ if __name__ == "__main__":
                             csvwriter.writerow([timestamp, observation_name, True, "Calibration grade archival successful", root]) 
 
                         else:
-                            logger.warn(f"Found UVH5 files in '{root}', but no calibration products.")
+                            logger.warning(f"Found UVH5 files in '{root}', but no calibration products.")
                             csvwriter.writerow([timestamp, observation_name, False, "Found UVH5 files in '{root}', but no calibration products.", root])
                 
                 else:
-                    logger.warn(f"No UVH5 files found in '{root}'.")
+                    logger.warning(f"No UVH5 files found in '{root}'.")
                     csvwriter.writerow([timestamp, "no_uvh5", False, "No UVH5 files found in directory.", root])
                     continue   
 
             #see if it is not to be processed or contains uvh5's
             else:
                 if any([re.match(r".*\.uvh5", file) for file in files]):
-                    logger.warn(f"No calibration directory found in '{root}', but does contain uvh5 files. Skipping.")
+                    logger.warning(f"No calibration directory found in '{root}', but does contain uvh5 files. Skipping.")
                     csvwriter.writerow([timestamp, "no calibration", False, "No calibration directory found but does contain uvh5's.", root])
                     continue
                 else:
