@@ -155,46 +155,62 @@ def checkForCalibrationGains(calibration_dir: str) -> bool:
 
     return False
 
-def writeCalibrationCollationCommand(uvh5_ac: str, uvh5_bd: str) -> (str, bool):
-    """Given a uvh5 file of each tuning in the same root, derive a collation command and return it.
-    Return command and Ture if the command could be derived. Else return error message and False."""
-    #read the uvh5 files:
+def fetchTimestampFromUVH5(uvh5_ac: str, uvh5_bd: str) -> (dict, bool):
+    """Given a uvh5 file of each tuning in the same root, fetch details from the observation and return a dict.
+    This dictionary contains all necessary information for the uvh5 calibration and collation commands."""
+    obs_info = {}
+    if os.path.dirname(uvh5_ac) == os.path.dirname(uvh5_bd):
+        obs_info["root"] = os.path.dirname(uvh5_ac)
+    else:
+        logger.error(f"Both tuning UVH5 files are not in the same directory.")
+        return f"UVH5 files are not in the same directory.", False
+
     try:
         uv.read(uvh5_ac)
-        start_epoch_seconds = Time(f"{uv.time_array[0] - 2400000.5}",format='mjd') 
-        fcentmhz_ac = uv.extra_keywords['CenterFrequencyHz']*1e-6
-        tbin=1e-6
-        sideband_ac = -1 if (fcentmhz_ac < 12000 and fcentmhz_ac > 8000) else 1
+        obs_info["start_epoch_seconds"] = Time(f"{uv.time_array[0] - 2400000.5}",format='mjd').unix 
+        obs_info["fcentmhz_ac"] = uv.extra_keywords['CenterFrequencyHz']*1e-6
+        obs_info["tbin"] = 1e-6
+        obs_info["sideband_ac"] = -1 if (obs_info["fcentmhz_ac"] < 12000 and obs_info["fcentmhz_ac"] > 8000) else 1
     except Exception as e:
         logger.error(f"Could not read uvh5 file '{uvh5_ac}' or extract required information: {e}")
         return f"Could not read uvh5 file '{uvh5_ac}' or extract required information: {e}", False
 
     try:
         uv.read(uvh5_bd)
-        fcentmhz_bd = uv.extra_keywords['CenterFrequencyHz']*1e-6
-        sideband_bd = -1 if (fcentmhz_bd < 12000 and fcentmhz_bd > 8000) else 1
+        obs_info["fcentmhz_bd"] = uv.extra_keywords['CenterFrequencyHz']*1e-6
+        obs_info["sideband_bd"] = -1 if (obs_info["fcentmhz_bd"] < 12000 and obs_info["fcentmhz_bd"] > 8000) else 1
     except Exception as e:
         logger.error(f"Could not read uvh5 file '{uvh5_bd}' or extract required information: {e}")
         return f"Could not read uvh5 file '{uvh5_bd}' or extract required information: {e}", False
+
+    return obs_info, True
+
+def writeUVH5CalibrationCommand(obs_info : dict) -> (str, bool):
+    """Given observation information derive a calibration command and return it alongside a status.
+    """
+    #derive the command:
+    if obs_info["start_epoch_seconds"] > 1683849599.0:
+        uvh5_command = f"/home/cosmic/anaconda3/envs/cosmic_vla/bin/python3 /home/cosmic/dev/COSMIC-VLA-CalibrationEngine/calibrate_uvh5.py {obs_info['root']} --gengain"
+    else:
+        uvh5_command = f"/home/cosmic/anaconda3/envs/cosmic_vla/bin/python3 /home/cosmic/dev/COSMIC-VLA-CalibrationEngine/calibrate_uvh5.py {obs_info['root']} --gengain --refant=ea12"
+    return uvh5_command, True
+
+def writeCalibrationCollationCommand(obs_info : dict) -> (str, bool):
+    """Given observation information, derive a collation command and return it.
+    Return command and Ture if the command could be derived. Else return error message and False."""
     
     #derive database environment variable:
-    if start_epoch_seconds.unix > 1685810556.0: #we've already recorded gains from this point onwards, so ignore.
+    if obs_info["start_epoch_seconds"] > 1685810556.0: #we've already recorded gains from this point onwards, so ignore.
         logger.info(f"Scan should have already been archived. Skipping...")
         return f"Scan is newer than {time.ctime(1685810556.0)} and should have already been archived. Skipping...", False
-    if start_epoch_seconds.unix < 1681084800.0:
+    if obs_info["start_epoch_seconds"] < 1681084800.0:
         env['COSMIC_DB_TABLE_SUFFIX']='_pre_20230410'
     else:
         if "COSMIC_DB_TABLE_SUFFIX" in env:
             del env['COSMIC_DB_TABLE_SUFFIX']
 
-    if os.path.dirname(uvh5_ac) == os.path.dirname(uvh5_bd):
-        root = os.path.dirname(uvh5_ac)
-    else:
-        logger.error(f"Both tuning UVH5 files are not in the same directory.")
-        return f"UVH5 files are not in the same directory.", False
-
     #derive the command:
-    collate_command = f"/home/cosmic/anaconda3/envs/cosmic_vla/bin/python3 /home/cosmic/dev/COSMIC-VLA-DelayEngine/calibration_gain_collator.py {root + '/calibration/calibration_gains'+'/*.json'} -o {root + '/calibration'} --no-slack-post --fcentmhz {fcentmhz_ac} {fcentmhz_bd} --sideband {sideband_ac} {sideband_bd} --snr-threshold 4.0 --tbin {tbin}  --start-epoch-seconds {start_epoch_seconds.unix} --cosmicdb-engine-configuration /home/cosmic/conf/cosmicdb_conf.yaml --dry-run --archive-mode"
+    collate_command = f"/home/cosmic/anaconda3/envs/cosmic_vla/bin/python3 /home/cosmic/dev/COSMIC-VLA-DelayEngine/calibration_gain_collator.py {obs_info['root'] + '/calibration/calibration_gains'+'/*.json'} -o {obs_info['root'] + '/calibration'} --no-slack-post --fcentmhz {obs_info['fcentmhz_ac']} {obs_info['fcentmhz_bd']} --sideband {obs_info['sideband_ac']} {obs_info['sideband_bd']} --snr-threshold 4.0 --tbin {obs_info['tbin']}  --start-epoch-seconds {obs_info['start_epoch_seconds']} --cosmicdb-engine-configuration /home/cosmic/conf/cosmicdb_conf.yaml --dry-run --archive-mode"
     return collate_command, True
 
 if __name__ == "__main__":
@@ -250,10 +266,16 @@ if __name__ == "__main__":
                             logger.error(f"Could not find uvh5 files for both tunings in '{root}'.")
                             csvwriter.writerow([timestamp, observation_name, False, "Could not find at least 1 UVH5 file for both tunings.", root])
                             continue
-                        collate_command, status = writeCalibrationCollationCommand(ac_file, bd_file)
 
+                        obs_info, status = fetchTimestampFromUVH5(ac_file, bd_file)
                         if status == False:
-                            logger.warning(f"Error deriving collation command: {collate_command}")
+                            logger.warning(f"Error extracting observation information from: {ac_file} and {bd_file}")
+                            csvwriter.writerow([timestamp, observation_name, False, obs_info, root])
+                            continue
+
+                        collate_command, status = writeCalibrationCollationCommand(obs_info)
+                        if status == False:
+                            logger.warning(f"Error generating collation command: {collate_command}")
                             csvwriter.writerow([timestamp, observation_name, False, collate_command, root])
                             continue
                             
@@ -263,7 +285,7 @@ if __name__ == "__main__":
                             if not have_gains:
                                 #We have calibration products but no gains, re-derive gains:
                                 logger.debug(f"Found calibration products in '{root}', but no calibration gains, re-deriving gains.")
-                                uvh5_command = f"/home/cosmic/anaconda3/envs/cosmic_vla/bin/python3 /home/cosmic/dev/COSMIC-VLA-CalibrationEngine/calibrate_uvh5.py {root} --gengain"
+                                uvh5_command, _ = writeUVH5CalibrationCommand(obs_info)
                             
                                 logger.debug(f"Executing:\n{uvh5_command}")
                                 uvh5_process = subprocess.Popen(uvh5_command, shell=True)
