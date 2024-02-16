@@ -22,6 +22,7 @@ from plot_delay_phase import plot_delay_phase, plot_gain_phase, plot_gain_amplit
 
 from cosmic_database import entities
 from cosmic_database.engine import CosmicDB_Engine
+import sqlalchemy
 from datetime import datetime
 
 SERVICE_NAME = os.path.splitext(os.path.basename(__file__))[0]
@@ -836,20 +837,32 @@ class CalibrationGainCollector():
                                     "scan_id": self.meta_obs["scanid"],
                                     "start": datetime.fromtimestamp(self.start_epoch_seconds),
                                 }
+                                self.log_and_post_slackmessage(f"""
+                                    Creating calibration entity for observation: {select_criteria}
+                                    """, severity="INFO", is_reply=True
+                                )
+                                db_obs = self.cosmicdb_engine.select_entity(
+                                    session, entities.CosmicDB_Observation, **select_criteria
+                                )
                             else:
-                                select_criteria = {
-                                    "scan_id": obs_id,
-                                    "start": datetime.fromtimestamp(self.start_epoch_seconds)
-                                }
-                            self.log_and_post_slackmessage(f"""
-                                Creating calibration entity for observation: {select_criteria}
-                                """, severity="INFO", is_reply=True
-                            )
-                            db_obs = self.cosmicdb_engine.select_entity(
-                                session, entities.CosmicDB_Observation, **select_criteria
-                            )
+                                #Do a 'start' range query to find the observation:
+                                scan_id = obs_id
+                                start_min = datetime.fromtimestamp(np.floor(self.start_epoch_seconds))
+                                start_max = datetime.fromtimestamp(np.ceil(self.start_epoch_seconds))
+                                db_obs = session.execute(
+                                    sqlalchemy.select(entities.CosmicDB_Observation).where(
+                                        sqlalchemy.and_(
+                                            entities.CosmicDB_Observation.scan_id == scan_id,
+                                            start_min <= entities.CosmicDB_Observation.start,
+                                            entities.CosmicDB_Observation.start <= start_max
+                                        )
+                                    )
+                                ).scalar_one_or_none()
 
-                            assert db_obs, "No observation found."
+                            if not db_obs and self.archive_mode:
+                                raise Exception("Observation not found in observation database.")
+                            else:
+                                assert db_obs, "Observation not found in observation database."
 
                             db_obscal = entities.CosmicDB_ObservationCalibration(
                                 observation_id=db_obs.id,
