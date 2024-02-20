@@ -4,6 +4,8 @@ import logging
 from logging.handlers import WatchedFileHandler
 from enum import Enum
 import time
+import json
+import numpy as np
 from astropy.time import Time
 from pyuvdata import UVData
 import argparse
@@ -155,7 +157,34 @@ def checkForCalibrationGains(calibration_dir: str) -> bool:
 
     return False
 
-def fetchTimestampFromUVH5(uvh5_ac: str, uvh5_bd: str) -> (dict, bool):
+def determineReferenceAntenna(calibration_dir: str, obs_info: dict) -> str:
+    """Given the calibration directory and observation information, look at the antenna will
+    closest to zero phases that is within the observation antennas. Return the antenna name. Return
+    None if failure."""
+    #Fetch the fixed_phases json filename:
+    json_file = os.path.join(calibration_dir,f"fixed_phases/{os.listdir(os.path.join(calibration_dir,'fixed_phases/'))[0]}")
+
+    # Load the JSON file
+    with open(json_file, 'r') as f:
+        fixed_phases = json.load(f)
+
+    min_sum = None
+    min_antenna = None
+
+    # Iterate over the dictionary
+    for antenna_name, lists in fixed_phases.items():
+        if antenna_name in obs_info["observed_antenna"]:
+            # Flatten the list of lists and calculate the absolute sum
+            total = np.sum(np.abs(np.array(lists)))
+            
+            # Update min_sum and min_antenna if necessary
+            if min_sum is None or total < min_sum:
+                min_sum = total
+                min_antenna = antenna_name
+
+    return min_antenna
+
+def fetchUVH5detail(uvh5_ac: str, uvh5_bd: str) -> (dict, bool):
     """Given a uvh5 file of each tuning in the same root, fetch details from the observation and return a dict.
     This dictionary contains all necessary information for the uvh5 calibration and collation commands."""
     obs_info = {}
@@ -171,6 +200,11 @@ def fetchTimestampFromUVH5(uvh5_ac: str, uvh5_bd: str) -> (dict, bool):
         obs_info["fcentmhz_ac"] = uv.extra_keywords['CenterFrequencyHz']*1e-6
         obs_info["tbin"] = 1e-6
         obs_info["sideband_ac"] = -1 if (obs_info["fcentmhz_ac"] < 12000 and obs_info["fcentmhz_ac"] > 8000) else 1
+
+        #fetch all antenna names present in the observation:
+        ants_numbers = uv.get_ants()
+        obs_info["observed_antenna"] = [uv.antenna_names[uv.antenna_numbers.tolist().index(antnum)] for antnum in ants_numbers]
+
     except Exception as e:
         logger.error(f"Could not read uvh5 file '{uvh5_ac}' or extract required information: {e}")
         return f"Could not read uvh5 file '{uvh5_ac}' or extract required information: {e}", False
@@ -189,10 +223,10 @@ def writeUVH5CalibrationCommand(obs_info : dict) -> (str, bool):
     """Given observation information derive a calibration command and return it alongside a status.
     """
     #derive the command:
-    if obs_info["start_epoch_seconds"] > 1683849599.0:
+    if obs_info["reference_antenna"] is None:
         uvh5_command = f"/home/cosmic/anaconda3/envs/cosmic_vla/bin/python3 /home/cosmic/dev/COSMIC-VLA-CalibrationEngine/calibrate_uvh5.py {obs_info['root']} --gengain"
     else:
-        uvh5_command = f"/home/cosmic/anaconda3/envs/cosmic_vla/bin/python3 /home/cosmic/dev/COSMIC-VLA-CalibrationEngine/calibrate_uvh5.py {obs_info['root']} --gengain --refant=ea12"
+        uvh5_command = f"/home/cosmic/anaconda3/envs/cosmic_vla/bin/python3 /home/cosmic/dev/COSMIC-VLA-CalibrationEngine/calibrate_uvh5.py {obs_info['root']} --gengain --refant={obs_info["reference_antenna"]}"
     return uvh5_command, True
 
 def writeCalibrationCollationCommand(obs_info : dict) -> (str, bool):
@@ -267,11 +301,13 @@ if __name__ == "__main__":
                             csvwriter.writerow([timestamp, observation_name, False, "Could not find at least 1 UVH5 file for both tunings.", root])
                             continue
 
-                        obs_info, status = fetchTimestampFromUVH5(ac_file, bd_file)
+                        obs_info, status = fetchUVH5detail(ac_file, bd_file)
                         if status == False:
                             logger.warning(f"Error extracting observation information from: {ac_file} and {bd_file}")
                             csvwriter.writerow([timestamp, observation_name, False, obs_info, root])
                             continue
+
+                        obs_info["reference_antenna"] = determineReferenceAntenna(calibration_dir, obs_info)
 
                         collate_command, status = writeCalibrationCollationCommand(obs_info)
                         if status == False:
