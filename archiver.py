@@ -137,8 +137,9 @@ def checkForCalibrationProducts(calibration_dir: str) -> bool:
         logger.info(f"Found calibration directory in '{root}', but missing critical subdirectories. Skipping.")
         return False
 
-def checkForCalibrationGains(calibration_dir: str) -> bool:
-    """Given a calibration_dir directory, check if the directory contains calibration gains. Return True if it does, else False"""
+def checkCalibrationGains(calibration_dir: str) -> bool:
+    """Given a calibration_dir directory, check if the directory contains calibration gains and check that they contain a reference antenna. 
+    Return True if it does, else False"""
     subdirs = os.listdir(calibration_dir)
     for subdir in subdirs:
         #check if the subdir is 'calibration_gains':
@@ -147,7 +148,19 @@ def checkForCalibrationGains(calibration_dir: str) -> bool:
             if any([re.match(r".*\.json", file) for file in os.listdir(os.path.join(calibration_dir, subdir))]):
                 #We have calibration gains:
                 logger.info(f"Found calibration gains in '{root}'")
-                return True
+                fname = f"{calibration_dir}/calibration_gains/{os.listdir(calibration_dir+'/calibration_gains/')[0]}"
+                with open(fname, 'r') as f:
+                    try:
+                        gains = json.load(f)
+                    except:
+                        logger.error(f"Error reading calibration gains from file {fname}.")
+                        return False
+                    if 'ref_ant' not in gains[list(gains.keys())[0]]:
+                        logger.info(f"Found calibration gains in '{root}', but no reference antenna field.")
+                        return False
+                    else:
+                        logger.info(f"Found calibration gains in '{root}', with reference antenna field.")
+                        return True
             else:
                 #We have a calibration gains folder but no gains:
                 logger.info(f"Found calibration_gains folder in '{root}', but no calibration gains therein.")
@@ -226,7 +239,7 @@ def writeUVH5CalibrationCommand(obs_info : dict) -> (str, bool):
     if obs_info["reference_antenna"] is None:
         uvh5_command = f"/home/cosmic/anaconda3/envs/cosmic_vla/bin/python3 /home/cosmic/dev/COSMIC-VLA-CalibrationEngine/calibrate_uvh5.py {obs_info['root']} --gengain"
     else:
-        uvh5_command = f"/home/cosmic/anaconda3/envs/cosmic_vla/bin/python3 /home/cosmic/dev/COSMIC-VLA-CalibrationEngine/calibrate_uvh5.py {obs_info['root']} --gengain --refant={obs_info["reference_antenna"]}"
+        uvh5_command = f"/home/cosmic/anaconda3/envs/cosmic_vla/bin/python3 /home/cosmic/dev/COSMIC-VLA-CalibrationEngine/calibrate_uvh5.py {obs_info['root']} --gengain --refant={obs_info['reference_antenna']}"
     return uvh5_command, True
 
 def writeCalibrationCollationCommand(obs_info : dict) -> (str, bool):
@@ -317,9 +330,9 @@ if __name__ == "__main__":
                             
                         if cal_products:
                             #We have calibration products and uvh5 files, check for calibration gains:
-                            have_gains = checkForCalibrationGains(calibration_dir)
+                            have_gains = checkCalibrationGains(calibration_dir)
                             if not have_gains:
-                                #We have calibration products but no gains, re-derive gains:
+                                #We have calibration products but no gains or incomplete gains, re-derive gains:
                                 logger.debug(f"Found calibration products in '{root}', but no calibration gains, re-deriving gains.")
                                 uvh5_command, _ = writeUVH5CalibrationCommand(obs_info)
                             
@@ -330,13 +343,15 @@ if __name__ == "__main__":
                                     logger.error(f"Error executing:\n{uvh5_command}")
                                     csvwriter.writerow([timestamp, observation_name, False, "Error recreating gains, unable to proceed", root])
                                     continue
-
-                            #Now recheck gains exist:
-                            have_gains = checkForCalibrationGains(calibration_dir)
-                            if not have_gains:
-                                logger.error(f"Re-derivation of calibration gains failed.")
-                                csvwriter.writerow([timestamp, observation_name, False, "Re-derivation of calibration gains failed. It is possibly a permissions or disk space error in writing out gains", root])
-                                continue
+                                else:
+                                    #Now recheck gains exist- even if the command was successful, the gains may not have been written out:
+                                    have_gains = checkCalibrationGains(calibration_dir)
+                                    if not have_gains:
+                                        logger.error(f"Re-derivation of calibration gains failed.")
+                                        csvwriter.writerow([timestamp, observation_name, False, "Re-derivation of calibration gains failed. It is possibly a permissions or disk space error in writing out gains", root])
+                                        continue
+                            else:
+                                logger.info(f"Found calibration gains in '{root}', with reference antenna field. Not re-deriving.")
                             
                             #By this point we have calibration products and calibration gains, proceed with collation:                       
                             logger.debug(f"Re-collating for retroarchival. Executing:\n{collate_command}")
