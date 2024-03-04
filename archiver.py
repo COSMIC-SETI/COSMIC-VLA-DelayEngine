@@ -210,9 +210,12 @@ def fetchUVH5detail(uvh5_ac: str, uvh5_bd: str) -> (dict, bool):
     try:
         uv.read(uvh5_ac)
         obs_info["start_epoch_seconds"] = Time(f"{uv.time_array[0] - 2400000.5}",format='mjd').unix 
-        obs_info["fcentmhz_ac"] = uv.extra_keywords['CenterFrequencyHz']*1e-6
+        obs_info["sideband_ac"] = -1 if (uv.extra_keywords['FirstChannelFrequencyHz'] < 12000 and uv.extra_keywords['FirstChannelFrequencyHz'] > 8000) else 1
+        if obs_info["sideband_ac"] == -1:
+            obs_info["fcentmhz_ac"] = (uv.extra_keywords['FirstChannelFrequencyHz'] - (uv.extra_keywords['NumberOfFEngineChannels']//2)*uv.extra_keywords['ChannelBandwidthHz'])*1e-6
+        else:
+            obs_info["fcentmhz_ac"] = (uv.extra_keywords['FirstChannelFrequencyHz'] + (uv.extra_keywords['NumberOfFEngineChannels']//2)*uv.extra_keywords['ChannelBandwidthHz'])*1e-6
         obs_info["tbin"] = 1e-6
-        obs_info["sideband_ac"] = -1 if (obs_info["fcentmhz_ac"] < 12000 and obs_info["fcentmhz_ac"] > 8000) else 1
 
         #fetch all antenna names present in the observation:
         ants_numbers = uv.get_ants()
@@ -224,8 +227,11 @@ def fetchUVH5detail(uvh5_ac: str, uvh5_bd: str) -> (dict, bool):
 
     try:
         uv.read(uvh5_bd)
-        obs_info["fcentmhz_bd"] = uv.extra_keywords['CenterFrequencyHz']*1e-6
-        obs_info["sideband_bd"] = -1 if (obs_info["fcentmhz_bd"] < 12000 and obs_info["fcentmhz_bd"] > 8000) else 1
+        obs_info["sideband_bd"] = -1 if (uv.extra_keywords['FirstChannelFrequencyHz'] < 12000 and uv.extra_keywords['FirstChannelFrequencyHz'] > 8000) else 1
+        if obs_info["sideband_bd"] == -1:
+            obs_info["fcentmhz_bd"] = (uv.extra_keywords['FirstChannelFrequencyHz'] - (uv.extra_keywords['NumberOfFEngineChannels']//2)*uv.extra_keywords['ChannelBandwidthHz'])*1e-6
+        else:
+            obs_info["fcentmhz_bd"] = (uv.extra_keywords['FirstChannelFrequencyHz'] + (uv.extra_keywords['NumberOfFEngineChannels']//2)*uv.extra_keywords['ChannelBandwidthHz'])*1e-6
     except Exception as e:
         logger.error(f"Could not read uvh5 file '{uvh5_bd}' or extract required information: {e}")
         return f"Could not read uvh5 file '{uvh5_bd}' or extract required information: {e}", False
@@ -249,7 +255,7 @@ def writeCalibrationCollationCommand(obs_info : dict) -> (str, bool):
     #derive database environment variable:
     if obs_info["start_epoch_seconds"] > 1685810556.0: #we've already recorded gains from this point onwards, so ignore.
         logger.info(f"Scan should have already been archived. Skipping...")
-        return f"Scan is newer than {time.ctime(1685810556.0)} and should have already been archived. Skipping...", False
+        return f"Scan is newer ({obs_info['start_epoch_seconds']}) than {time.ctime(1685810556.0)} and should have already been archived. Skipping...", False
     if obs_info["start_epoch_seconds"] < 1681084800.0:
         env['COSMIC_DB_TABLE_SUFFIX']='_pre_20230410'
     else:

@@ -306,7 +306,7 @@ class CalibrationGainCollector():
             self.log_and_post_slackmessage(f"Processing tuning {tune_idx}, start freq {start_freq}...", severity="DEBUG")
             obs_id_t = payload['obs_id']
             ref_ant_t = payload['ref_ant']
-            if payload['flagged_hz'] is not None:
+            if 'flagged_hz' in payload and payload['flagged_hz'] is not None:
                 for ant, frequencies in payload['flagged_hz'].items():
                     ant_tune = ant+"_"+str(tune_idx)
                     if ant_tune not in anttune_flagged_frequencies:
@@ -398,7 +398,9 @@ class CalibrationGainCollector():
                 self.log_and_post_slackmessage(f"""
                 Not all collected frequencies are present inside those calculated to be the expected observation frequencies for tuning {tuning}.
                 Collected frequencies span range:
-                {collected_frequencies[tuning][0]} -> {collected_frequencies[tuning][-1]}Hz
+                {collected_frequencies[tuning][0]} -> {collected_frequencies[tuning][-1]}Hz.
+                Expect them to lie within range:
+                {full_observation_channel_frequencies[tuning,0]} -> {full_observation_channel_frequencies[tuning,-1]}Hz.
                 Aborting run.""", severity="ERROR", is_reply=True)
                 return None, None
 
@@ -569,6 +571,8 @@ class CalibrationGainCollector():
                 )
                 if full_gains_map is None:
                     if manual_operation:
+                        if self.archive_mode:
+                            raise Exception("Could not place received frequencies within expected observation frequencies.")
                         return
                     continue
                 
