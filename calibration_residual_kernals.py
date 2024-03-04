@@ -1,4 +1,5 @@
 import numpy as np
+import warnings
 from scipy.stats import median_abs_deviation as mad
 
 def calc_calibration_ant_grade(ant_to_gains):
@@ -17,7 +18,12 @@ def calc_calibration_ant_grade(ant_to_gains):
     ant_to_grade = {}
     for ant, gain_matrix in ant_to_gains.items():
         gain_matrix = np.array(gain_matrix,dtype=np.complex64)
-        ant_to_grade[ant] = np.abs(np.sum(gain_matrix, axis=1))/np.sum(np.abs(gain_matrix),axis=1)
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("error", category=RuntimeWarning)
+                ant_to_grade[ant] = np.abs(np.sum(gain_matrix, axis=1))/np.sum(np.abs(gain_matrix),axis=1)
+        except (ZeroDivisionError, RuntimeWarning):
+            ant_to_grade[ant] = -1.0
     return ant_to_grade
 
 def calc_calibration_freq_grade(ant_to_gains):
@@ -43,7 +49,12 @@ def calc_calibration_freq_grade(ant_to_gains):
 
     for stream in range(freq_to_grade.shape[0]):
         nonzero_indexes = np.where(sum_abs_freq[stream,:] != 0)[0]
-        freq_to_grade[stream,nonzero_indexes] = np.abs(sum_freq[stream,nonzero_indexes])/sum_abs_freq[stream,nonzero_indexes]
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("error", category=RuntimeWarning)
+                freq_to_grade[stream,nonzero_indexes] = np.abs(sum_freq[stream,nonzero_indexes])/sum_abs_freq[stream,nonzero_indexes]
+        except (ZeroDivisionError, RuntimeWarning):
+            freq_to_grade[stream,nonzero_indexes] = -1.0
 
     return freq_to_grade
 
@@ -66,8 +77,12 @@ def calc_full_grade(ant_to_gains):
         gain_matrix = np.array(gain_matrix,dtype=np.complex64)
         sum_freq = sum_freq + gain_matrix
         sum_abs_freq = np.abs(sum_abs_freq) + np.abs(gain_matrix)
-
-    grade = np.abs(np.sum(sum_freq))/np.sum(sum_abs_freq)
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", category=RuntimeWarning)
+            grade = np.abs(np.sum(sum_freq))/np.sum(sum_abs_freq)
+    except (ZeroDivisionError, RuntimeWarning):
+        grade = -1.0
     return grade
 
 def calc_residuals_from_polyfit(ant_to_gains, observation_frequencies, current_phase_cals, frequency_indices, snr_threshold=4.0):
