@@ -1095,14 +1095,22 @@ if __name__ == "__main__":
         for path in args.paths:
             if os.path.isfile(path):
                 with open(path, 'r') as f:
-                    input_json_dict.update(json.load(f))
+                    if f.read().strip():
+                        f.seek(0)  # reset file pointer to beginning 
+                        input_json_dict.update(json.load(f))
+                    else:
+                        print(f"Incorrect or empty json file: {path}")
             elif os.path.isdir(path):
                 for root, dirs, files in os.walk(path):
                     for file in files:
                         if file.endswith('.json'):
                             file_path = os.path.join(root, file)
                             with open(file_path, 'r') as f:
-                                input_json_dict.update(json.load(f))
+                                if f.read().strip():
+                                    f.seek(0)  # reset file pointer to beginning 
+                                    input_json_dict.update(json.load(f))
+                                else:
+                                    print(f"Incorrect or empty json file: {path}")
     
     if manual_run:
         LOGFILENAME = "./tmp_DelayCalibration.log"
