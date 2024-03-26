@@ -494,6 +494,7 @@ class CalibrationGainCollector():
         return full_gains_map, frequency_indices
 
     def start(self):
+        obs_id = None
         while True:
             if not self.dry_run:
                 #clear upfront incase bad calibration gains cause continuation of loop
@@ -529,7 +530,7 @@ class CalibrationGainCollector():
 
                 #Start function that waits for hash_timeout before collecting redis hash.
                 try:
-                    ant_tune_to_collected_gains, collected_frequencies, self.ants, obs_id, ref_ant, flagged_frequencies, num_flagged_frequencies = self.collect_phases_for_hash_timeout(self.hash_timeout, manual_operation = manual_operation) 
+                    ant_tune_to_collected_gains, collected_frequencies, self.ants, obs_id_t, ref_ant, flagged_frequencies, num_flagged_frequencies = self.collect_phases_for_hash_timeout(self.hash_timeout, manual_operation = manual_operation) 
                 except Exception as e:
                     self.log_and_post_slackmessage(f"""
                     The collection of calibration from GPU gains failed:
@@ -538,6 +539,17 @@ class CalibrationGainCollector():
                     if manual_operation:
                         return
                     continue
+
+                if obs_id is not None and obs_id_t == obs_id: 
+                    self.log_and_post_slackmessage(f"""
+                    Latest calibration trigger is a latecomer from the previous calibration run.
+                    Received gains with obs_id = `{obs_id_t}`
+                    which match prior run with
+                    obs_id = `{obs_id}`.
+                    Ignoring...""", severity="WARNING", is_reply = True)
+                    continue
+                else:
+                    obs_id = obs_id_t
 
                 #Update output_dir to contain projid, dataset_id and obs_id
                 output_dir = self.user_output_dir if manual_operation else os.path.join(self.user_output_dir, self.projid, self.dataset, obs_id, "calibration")
