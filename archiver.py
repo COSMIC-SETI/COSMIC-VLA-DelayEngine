@@ -208,7 +208,7 @@ def fetchUVH5detail(uvh5_ac: str, uvh5_bd: str) -> (dict, bool):
         return f"UVH5 files are not in the same directory.", False
 
     try:
-        uv.read(uvh5_ac)
+        uv.read(uvh5_ac, fix_old_proj=False)
         obs_info["start_epoch_seconds"] = Time(f"{uv.time_array[0] - 2400000.5}",format='mjd').unix 
         obs_info["sideband_ac"] = -1 if (uv.extra_keywords['FirstChannelFrequencyHz'] < 12000 and uv.extra_keywords['FirstChannelFrequencyHz'] > 8000) else 1
         if obs_info["sideband_ac"] == -1:
@@ -226,7 +226,7 @@ def fetchUVH5detail(uvh5_ac: str, uvh5_bd: str) -> (dict, bool):
         return f"Could not read uvh5 file '{uvh5_ac}' or extract required information: {e}", False
 
     try:
-        uv.read(uvh5_bd)
+        uv.read(uvh5_bd, fix_old_proj=False)
         obs_info["sideband_bd"] = -1 if (uv.extra_keywords['FirstChannelFrequencyHz'] < 12000 and uv.extra_keywords['FirstChannelFrequencyHz'] > 8000) else 1
         if obs_info["sideband_bd"] == -1:
             obs_info["fcentmhz_bd"] = (uv.extra_keywords['FirstChannelFrequencyHz'] - (uv.extra_keywords['NumberOfFEngineChannels']//2)*uv.extra_keywords['ChannelBandwidthHz'])*1e-6
@@ -248,14 +248,16 @@ def writeUVH5CalibrationCommand(obs_info : dict) -> (str, bool):
         uvh5_command = f"/home/cosmic/anaconda3/envs/cosmic_vla/bin/python3 /home/cosmic/dev/COSMIC-VLA-CalibrationEngine/calibrate_uvh5.py {obs_info['root']} --gengain --refant={obs_info['reference_antenna']}"
     return uvh5_command, True
 
-def writeCalibrationCollationCommand(obs_info : dict) -> (str, bool):
+def writeCalibrationCollationCommand(obs_info : dict, fcent_offset : float=0.0) -> (str, bool):
     """Given observation information, derive a collation command and return it.
-    Return command and Ture if the command could be derived. Else return error message and False."""
+    Return command and Ture if the command could be derived. Else return error message and False.
+    
+    There is an option to provide an fcent offset due to occasionally incorrectly written frequency information in the UVH5 files"""
     
     #derive database environment variable:
     if obs_info["start_epoch_seconds"] > 1685810556.0: #we've already recorded gains from this point onwards, so ignore.
         logger.info(f"Scan should have already been archived. Skipping...")
-        return f"Scan is newer ({obs_info['start_epoch_seconds']}) than {time.ctime(1685810556.0)} and should have already been archived. Skipping...", False
+        return f"Scan is newer than {time.ctime(1685810556.0)} and should have already been archived. Skipping...", False
     if obs_info["start_epoch_seconds"] < 1681084800.0:
         env['COSMIC_DB_TABLE_SUFFIX']='_pre_20230410'
     else:
@@ -263,7 +265,7 @@ def writeCalibrationCollationCommand(obs_info : dict) -> (str, bool):
             del env['COSMIC_DB_TABLE_SUFFIX']
 
     #derive the command:
-    collate_command = f"/home/cosmic/anaconda3/envs/cosmic_vla/bin/python3 /home/cosmic/dev/COSMIC-VLA-DelayEngine/calibration_gain_collator.py {obs_info['root'] + '/calibration/calibration_gains'+'/*.json'} -o {obs_info['root'] + '/calibration'} --no-slack-post --fcentmhz {obs_info['fcentmhz_ac']} {obs_info['fcentmhz_bd']} --sideband {obs_info['sideband_ac']} {obs_info['sideband_bd']} --snr-threshold 4.0 --tbin {obs_info['tbin']}  --start-epoch-seconds {obs_info['start_epoch_seconds']} --cosmicdb-engine-configuration /home/cosmic/conf/cosmicdb_conf.yaml --dry-run --archive-mode"
+    collate_command = f"/home/cosmic/anaconda3/envs/cosmic_vla/bin/python3 /home/cosmic/dev/COSMIC-VLA-DelayEngine/calibration_gain_collator.py {obs_info['root'] + '/calibration/calibration_gains'+'/*.json'} -o {obs_info['root'] + '/calibration'} --no-slack-post --fcentmhz {obs_info['fcentmhz_ac']+(fcent_offset)} {obs_info['fcentmhz_bd']+(fcent_offset)} --sideband {obs_info['sideband_ac']} {obs_info['sideband_bd']} --snr-threshold 4.0 --tbin {obs_info['tbin']}  --start-epoch-seconds {obs_info['start_epoch_seconds']} --cosmicdb-engine-configuration /home/cosmic/conf/cosmicdb_conf.yaml --dry-run --archive-mode"
     return collate_command, True
 
 if __name__ == "__main__":
@@ -363,6 +365,22 @@ if __name__ == "__main__":
                             logger.debug(f"Re-collating for retroarchival. Executing:\n{collate_command}")
                             collate_process = subprocess.Popen(collate_command, shell=True, env=env)
                             exit_code = collate_process.wait()
+                            if exit_code != 0:
+                                logger.debug(f"Error executing:\n{collate_command}, trying different fcent offsets.")
+                                fcent_offset_to_try = [0.5,-0.5]
+                                for fcent_offset in fcent_offset_to_try:
+                                    logger.debug(f"Trying offset {fcent_offset} MHz.")
+                                    collate_command, status = writeCalibrationCollationCommand(obs_info, fcent_offset=fcent_offset)
+                                    if status == False:
+                                        logger.warning(f"Error generating collation command: {collate_command}")
+                                        csvwriter.writerow([timestamp, observation_name, False, collate_command, root])
+                                        continue
+                                    logger.debug(f"Re-collating for retroarchival. Executing:\n{collate_command}")
+                                    collate_process = subprocess.Popen(collate_command, shell=True, env=env)
+                                    exit_code = collate_process.wait()
+                                    if exit_code ==0:
+                                        break
+
                             if exit_code != 0:
                                 logger.error(f"Error executing:\n{collate_command}")
                                 csvwriter.writerow([timestamp, observation_name, False, f"Could not collate gains and calculate grade. This is likely due to observation not being present in Observation database", root])
