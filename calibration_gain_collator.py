@@ -849,19 +849,16 @@ class CalibrationGainCollector():
                                     session, entities.CosmicDB_Observation, **select_criteria
                                 )
                             else:
-                                #Do a 'start' range query to find the observation:
+                                #Query just on scan_id and then sort against start time and pick the closest
                                 scan_id = obs_id
-                                start_min = datetime.fromtimestamp(np.floor(self.start_epoch_seconds))
-                                start_max = datetime.fromtimestamp(np.ceil(self.start_epoch_seconds))
+                                start = datetime.fromtimestamp(self.start_epoch_seconds)
+                                query = sqlalchemy.select(entities.CosmicDB_Observation).where(
+                                    entities.CosmicDB_Observation.scan_id == scan_id
+                                )
+                                query = query.order_by(sqlalchemy.func.abs(entities.CosmicDB_Observation.start - start))
                                 db_obs = session.execute(
-                                    sqlalchemy.select(entities.CosmicDB_Observation).where(
-                                        sqlalchemy.and_(
-                                            entities.CosmicDB_Observation.scan_id == scan_id,
-                                            start_min <= entities.CosmicDB_Observation.start,
-                                            entities.CosmicDB_Observation.start <= start_max
-                                        )
-                                    )
-                                ).scalar_one_or_none()
+                                    query
+                                ).first()[0]
 
                             if not db_obs and self.archive_mode:
                                 raise Exception("Observation not found in observation database.")
@@ -934,7 +931,7 @@ class CalibrationGainCollector():
                         Failed to post database entities: {traceback.format_exc()}
                         """, severity = "WARNING", is_reply=True)
                         if self.archive_mode:
-                            raise Exception("Failed to post database entities")
+                            raise Exception(f"Failed to post database entities: {err}")
                 else:
                     self.log_and_post_slackmessage(f"No cosmic database engine configuration provided. Not publishing results to database.",
                     severity = "INFO", is_reply=True)
