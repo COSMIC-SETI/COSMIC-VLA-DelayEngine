@@ -684,6 +684,7 @@ class CalibrationGainCollector():
                     """, severity = "ERROR", is_reply= True)
                     return
 
+                #-------------------------CALCULATE RECEIVED GAIN GRADE-------------------------#
                 ant_to_grade = calc_calibration_ant_grade(full_gains_map)
                 freq_to_grade = calc_calibration_freq_grade(full_gains_map)
                 full_grade = calc_full_grade(full_gains_map)
@@ -708,20 +709,21 @@ class CalibrationGainCollector():
                         Calculated overall grade for calibration recording of:
                         `{full_grade}`
                         """, severity = "INFO", is_reply=True)
-                redis_publish_dict_to_hash(self.redis_obj, CALIBRATION_CACHE_HASH, {"grade":full_grade})
+                if not manual_operation:
+                    redis_publish_dict_to_hash(self.redis_obj, CALIBRATION_CACHE_HASH, {"grade":full_grade})
+
+                #-------------------------CALCULATE RESIDUAL DELAYS AND PHASES FOR COLLECTED GAINS-------------------------#
                 self.log_and_post_slackmessage(f"""
                 Subtracting fixed phases found in
                 ```{fixed_phase_filepath}```
                 from the received gain matrix
                 """, severity = "INFO", is_reply=True)
-
-                #-------------------------CALCULATE RESIDUAL DELAYS AND PHASES FOR COLLECTED GAINS-------------------------#
                 try:
                     if self.fit_method == "linear":
                         delay_residual_map, phase_cal_map = calc_residuals_from_polyfit(full_gains_map, full_observation_channel_frequencies_hz,
                                                                                         last_fixed_phases, frequency_indices, snr_threshold = self.snr_threshold)
                     elif self.fit_method == "fourier":
-                        delay_residual_map, phase_cal_map, snr_map, sigma_phase_map = calc_residuals_from_ifft(full_gains_map,full_observation_channel_frequencies_hz,
+                        delay_residual_map, phase_cal_map, snr_map, sigma_phase_map, correct_gains_map = calc_residuals_from_ifft(full_gains_map,full_observation_channel_frequencies_hz,
                                                                                     last_fixed_phases, frequency_indices, sideband, snr_threshold = self.snr_threshold)
                 except Exception as e:
                     self.log_and_post_slackmessage(f"""
@@ -732,6 +734,45 @@ class CalibrationGainCollector():
                     if manual_operation:
                         return
                     continue
+
+                #-------------------------CALCULATE PROJECTED GRADE-------------------------#
+                ant_to_grade = calc_calibration_ant_grade(correct_gains_map)
+                freq_to_grade = calc_calibration_freq_grade(correct_gains_map)
+                projected_full_grade = calc_full_grade(correct_gains_map)
+                grade_file_path = plot_gain_grade(ant_to_grade, freq_to_grade, outdir=os.path.join(output_dir ,"projected_calibration_plots"), outfilestem=obs_id,
+                        source_name = self.source)
+                if grade_file_path is not None:
+                    self.log_and_post_slackmessage(f"""
+                            Saved projected calibration gain grade plot to: 
+                            `{grade_file_path}`
+                            """, severity = "DEBUG")
+                    if self.slackbot is not None:
+                        try:
+                            self.slackbot.upload_file(grade_file_path,
+                                                    title =f"Projected calibration gain grade from\n`{obs_id}`",
+                                                    thread_ts = self.slack_message_ts)
+                        except:
+                            self.log_and_post_slackmessage("Error uploading plots", severity="WARNING", is_reply=True)
+                else:
+                    self.log_and_post_slackmessage("Unable to save/generate projected gain grade plot", severity="WARNING", is_reply=True)
+
+                self.log_and_post_slackmessage(f"""
+                        Calculated the projected overall grade for upcoming calibration recording of:
+                        `{projected_full_grade}`
+                        """, severity = "INFO", is_reply=True)
+                if not manual_operation:
+                    redis_publish_dict_to_hash(self.redis_obj, CALIBRATION_CACHE_HASH, {"projected_grade":projected_full_grade})
+
+
+
+
+                phase_file_path_ac, phase_file_path_bd = plot_gain_phase(correct_gains_map, full_observation_channel_frequencies_hz, frequency_indices, 
+                                                                        anttune_to_flagged_frequencies = flagged_frequencies,fit_method = self.fit_method,
+                                                                        outdir = os.path.join(output_dir, "projected_calibration_plots"), outfilestem=obs_id,
+                                                                        source_name = self.source)
+                amplitude_file_path_ac, amplitude_file_path_bd = plot_gain_amplitude(correct_gains_map, full_observation_channel_frequencies_hz, frequency_indices,
+                                                                        anttune_to_flagged_frequencies = flagged_frequencies, outdir = os.path.join(output_dir, "projected_calibration_plots"), outfilestem=obs_id,
+                                                                        source_name = self.source)
 
                 #-------------------------SAVE RESIDUAL DELAYS-------------------------#
                 #For json dumping:
@@ -749,8 +790,8 @@ class CalibrationGainCollector():
                         {delay_residual_filename}""", severity = "DEBUG")
                 except:
                     self.log_and_post_slackmessage(f"Unable to save residual delays to file `{delay_residual_filename}`", severity="WARNING", is_reply=True)
-
-                redis_publish_dict_to_hash(self.redis_obj, "META_residualDelays", t_delay_dict)
+                if not manual_operation:
+                    redis_publish_dict_to_hash(self.redis_obj, "META_residualDelays", t_delay_dict)
 
                 pretty_print_json = pprint.pformat(json.dumps(t_delay_dict)).replace("'", '"')
                 self.log_and_post_slackmessage(f"""

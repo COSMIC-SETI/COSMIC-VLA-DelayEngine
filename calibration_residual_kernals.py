@@ -167,11 +167,14 @@ def calc_residuals_from_ifft(ant_to_gains, observation_frequencies, current_phas
                     {<ant> : [[snr_steam0, snr_stream1...],...]}
         sigma_phase_map    : A mapping of antenna to the standard deviation of the phase calibrations
                     {<ant> : [[sigma_phase_steam0, sigma_phase_stream1...],...]}
+        correct_gains_map  : A mapping of antenna to the corrected gain matrix i.e. the gain matrix with the applied phase cal and residual delay.
+                    {<ant> : [[complex(corrected_gains_pol0_tune0)], [complex(corrected_gains_pol1_tune0)], [complex(corrected_gains_pol0_tune1)], [complex(corrected_gains_pol1_tune1)]], ...}
     """
     delay_residual_map = {}
     phase_cal_map = {}
     snr_map = {} #the SNR of the ifft
     sigma_phase_map = {} #the spread of the phases
+    corrected_gains_map = {}
     
     #Finding the number of antennas here. Maybe there is a better way
     # nant = len(ant_to_gains.keys())
@@ -199,6 +202,7 @@ def calc_residuals_from_ifft(ant_to_gains, observation_frequencies, current_phas
 
             residual_delays = np.zeros(nof_streams, dtype=np.float64)
             phase_cals = np.zeros(gain_matrix.shape, dtype=np.float64)
+            gain_correction_factor = np.zeros(gain_matrix.shape, dtype=np.complex64)
             snr = np.zeros(nof_streams, dtype=np.float64)
             sigma_phase = np.zeros(nof_streams, dtype=np.float64)
             
@@ -223,6 +227,8 @@ def calc_residuals_from_ifft(ant_to_gains, observation_frequencies, current_phas
                         residual_delays[stream_idx] = residual_delay
                         gain_from_residual_delay = np.exp(2j*np.pi*(obsfreqs*1e-9)*residual_delays[stream_idx])
                         phase_cals[stream_idx] = np.angle(new_gain_matrix[stream_idx,:]/gain_from_residual_delay)
+                        #calculate corrective phase from both the residual delays and phase cal:
+                        gain_correction_factor[stream_idx] = np.exp(1j*phase_cals[stream_idx]) * gain_from_residual_delay
                         #zero all phases outside the collected gains range
                         phase_cals[stream_idx, uncollected_gain_range] = 0.0
                     else:
@@ -236,9 +242,13 @@ def calc_residuals_from_ifft(ant_to_gains, observation_frequencies, current_phas
             phase_cal_map[ant] = phase_cals
             snr_map[ant] = snr
             sigma_phase_map[ant] = sigma_phase
+
+            corrected_gains_map[ant] = new_gain_matrix / gain_correction_factor
+            corrected_gains_map[ant][:,uncollected_gain_range] = 0.0+0.0j
             
         else:
             phase_cal_map[ant] = phase_matrix
             delay_residual_map[ant] = np.zeros(nof_streams,dtype=np.float64)
+            corrected_gains_map[ant] = np.zeros(gain_matrix.shape,dtype=np.complex64)
     
-    return delay_residual_map, phase_cal_map, snr_map, sigma_phase_map
+    return delay_residual_map, phase_cal_map, snr_map, sigma_phase_map, corrected_gains_map
