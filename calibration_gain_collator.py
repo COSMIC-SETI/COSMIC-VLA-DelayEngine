@@ -276,6 +276,7 @@ class CalibrationGainCollector():
             - obs_id of observation used for received gains
             - anttune_flagged_frequencies : dict of mapping antenna_tune : [flagged frequencies]
             - ant_num_flagged_frequencies : dict of mapping antenna : num_flagged_frequencies
+            - gain_mean : if proposed gain grades are present in the payload, return the mean
         """
         if manual_operation:
             calibration_gains = self.input_json_dict
@@ -294,6 +295,7 @@ class CalibrationGainCollector():
         ant_num_flagged_frequencies = {}
         collected_frequencies = {0:[],1:[]}
         ant_tune_to_collected_gain = {}
+        gain_grade = []
         for ant,tuning_idx in itertools.product(ants, range(self.nof_tunings)):
             ant_tune_to_collected_gain[ant+f"_{tuning_idx}"] = [[],[]]
 
@@ -306,6 +308,10 @@ class CalibrationGainCollector():
             self.log_and_post_slackmessage(f"Processing tuning {tune_idx}, start freq {start_freq}...", severity="DEBUG")
             obs_id_t = payload['obs_id']
             ref_ant_t = payload['ref_ant']
+            #if payload has "proposed_gain_grade" field, add its value to a list
+            if 'proposed_gain_grade' in payload:
+                gain_grade.append(payload['proposed_gain_grade'])
+            
             if 'flagged_hz' in payload and payload['flagged_hz'] is not None:
                 for ant, frequencies in payload['flagged_hz'].items():
                     ant_tune = ant+"_"+str(tune_idx)
@@ -350,7 +356,11 @@ class CalibrationGainCollector():
 
             collected_frequencies[tune_idx] += payload['freqs_hz'] 
         
-        return ant_tune_to_collected_gain, collected_frequencies, ants, obs_id, ref_ant, anttune_flagged_frequencies, ant_num_flagged_frequencies
+        if len(gain_grade) > 0:
+            gain_mean = sum(gain_grade) / len(gain_grade)
+        else:
+            gain_mean = None
+        return ant_tune_to_collected_gain, collected_frequencies, ants, obs_id, ref_ant, anttune_flagged_frequencies, ant_num_flagged_frequencies, gain_mean
 
     def correctly_place_residual_phases_and_delays(self, ant_tune_to_collected_gain, 
         collected_frequencies, full_observation_channel_frequencies):
@@ -508,7 +518,7 @@ class CalibrationGainCollector():
 
                 #Start function that waits for hash_timeout before collecting redis hash.
                 try:
-                    ant_tune_to_collected_gains, collected_frequencies, self.ants, obs_id, ref_ant, flagged_frequencies, num_flagged_frequencies = self.collect_phases_for_hash_timeout(self.hash_timeout, manual_operation = manual_operation) 
+                    ant_tune_to_collected_gains, collected_frequencies, self.ants, obs_id, ref_ant, flagged_frequencies, num_flagged_frequencies, gain_mean = self.collect_phases_for_hash_timeout(self.hash_timeout, manual_operation = manual_operation) 
                 except Exception as e:
                     self.log_and_post_slackmessage(f"""
                     The collection of calibration from GPU gains failed:
@@ -518,6 +528,7 @@ class CalibrationGainCollector():
                         return
                     continue
 
+                print(f"Calculated proposed gain mean of: {gain_mean}")
                 #Update output_dir to contain projid, dataset_id and obs_id
                 output_dir = self.user_output_dir if manual_operation else os.path.join(self.user_output_dir, self.projid, self.dataset, obs_id, "calibration")
                 try:
