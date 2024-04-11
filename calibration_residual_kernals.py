@@ -243,7 +243,7 @@ def calc_residuals_from_ifft(ant_to_gains, observation_frequencies, current_phas
             snr_map[ant] = snr
             sigma_phase_map[ant] = sigma_phase
 
-            regularisation_factor = 1e-17
+            regularisation_factor = 1j*1e-17
             gain_correction_factor = np.where(gain_correction_factor==0, regularisation_factor, gain_correction_factor)
             corrected_gains_map[ant] = new_gain_matrix / gain_correction_factor
             corrected_gains_map[ant][:,uncollected_gain_range] = 0.0+0.0j
