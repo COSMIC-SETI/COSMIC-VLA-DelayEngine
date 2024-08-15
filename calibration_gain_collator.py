@@ -518,8 +518,9 @@ class CalibrationGainCollector():
                     ]
 
                 #Start function that waits for hash_timeout before collecting redis hash.
+                gain_mean = None
                 try:
-                    ant_tune_to_collected_gains, collected_frequencies, self.ants, obs_id, ref_ant, flagged_frequencies, num_flagged_frequencies, gain_mean = self.collect_phases_for_hash_timeout(self.hash_timeout, manual_operation = manual_operation) 
+                    ant_tune_to_collected_gains, collected_frequencies, self.ants, obs_id_t, ref_ant, flagged_frequencies, num_flagged_frequencies, gain_mean = self.collect_phases_for_hash_timeout(self.hash_timeout, manual_operation = manual_operation) 
                 except Exception as e:
                     self.log_and_post_slackmessage(f"""
                     The collection of calibration from GPU gains failed:
