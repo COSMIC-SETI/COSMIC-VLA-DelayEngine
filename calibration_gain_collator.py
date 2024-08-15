@@ -483,6 +483,7 @@ class CalibrationGainCollector():
         return full_gains_map, frequency_indices
 
     def start(self):
+        obs_id = None
         while True:
             if not self.dry_run:
                 #clear upfront incase bad calibration gains cause continuation of loop
@@ -528,7 +529,17 @@ class CalibrationGainCollector():
                         return
                     continue
 
-                print(f"Calculated proposed gain mean of: {gain_mean}")
+                if obs_id is not None and obs_id_t == obs_id: 
+                    self.log_and_post_slackmessage(f"""
+                    Latest calibration trigger is a latecomer from the previous calibration run.
+                    Received gains with obs_id = `{obs_id_t}`
+                    which match prior run with
+                    obs_id = `{obs_id}`.
+                    Ignoring...""", severity="WARNING", is_reply = True)
+                    continue
+                else:
+                    obs_id = obs_id_t
+
                 #Update output_dir to contain projid, dataset_id and obs_id
                 output_dir = self.user_output_dir if manual_operation else os.path.join(self.user_output_dir, self.projid, self.dataset, obs_id, "calibration")
                 try:
@@ -1031,6 +1042,7 @@ class CalibrationGainCollector():
                         reference antenna = `{ref_ant}`,
                         results directory = `{output_dir}`,
                         calibration grade = `{full_grade}`,
+                        predicted calibration grade = `{gain_mean}`"
                     """, severity="INFO", is_reply=False, update_message=True)
                     self.log_and_post_slackmessage(f"""
                         Clearing redis hash: {GPU_GAINS_REDIS_HASH} contents in anticipation of next calibration run.
