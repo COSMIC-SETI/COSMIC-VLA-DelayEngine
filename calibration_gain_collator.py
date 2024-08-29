@@ -696,8 +696,11 @@ class CalibrationGainCollector():
                 freq_to_grade = calc_calibration_freq_grade(full_gains_map)
                 full_grade = calc_full_grade(full_gains_map)
                 if not self.archive_mode:
-                    grade_file_path = plot_gain_grade(ant_to_grade, freq_to_grade, outdir=os.path.join(output_dir ,"calibration_plots"), outfilestem=obs_id,
+                    try:
+                        grade_file_path = plot_gain_grade(ant_to_grade, freq_to_grade, outdir=os.path.join(output_dir ,"calibration_plots"), outfilestem=obs_id,
                             source_name = self.source)
+                    except:
+                        grade_file_path = None
                     if grade_file_path is not None:
                         self.log_and_post_slackmessage(f"""
                                 Saved calibration gain grade plot to: 

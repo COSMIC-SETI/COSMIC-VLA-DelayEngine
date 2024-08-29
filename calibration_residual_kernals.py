@@ -18,12 +18,14 @@ def calc_calibration_ant_grade(ant_to_gains):
     ant_to_grade = {}
     for ant, gain_matrix in ant_to_gains.items():
         gain_matrix = np.array(gain_matrix,dtype=np.complex64)
+        gain_shape = gain_matrix.shape
+        nof_streams = gain_shape[0]
         try:
             with warnings.catch_warnings():
                 warnings.simplefilter("error", category=RuntimeWarning)
                 ant_to_grade[ant] = np.abs(np.sum(gain_matrix, axis=1))/np.sum(np.abs(gain_matrix),axis=1)
         except (ZeroDivisionError, RuntimeWarning):
-            ant_to_grade[ant] = -1.0
+            ant_to_grade[ant] = [-1.0]*nof_streams
     return ant_to_grade
 
 def calc_calibration_freq_grade(ant_to_gains):
@@ -44,6 +46,8 @@ def calc_calibration_freq_grade(ant_to_gains):
     freq_to_grade = np.ones(np.array(ant_to_gains[antenna[0]]).shape)
     for _, gain_matrix in ant_to_gains.items():
         gain_matrix = np.array(gain_matrix,dtype=np.complex64)
+        gain_shape = gain_matrix.shape
+        nof_streams = gain_shape[0]
         sum_freq = sum_freq + gain_matrix
         sum_abs_freq = np.abs(sum_abs_freq) + np.abs(gain_matrix)
 
@@ -54,7 +58,7 @@ def calc_calibration_freq_grade(ant_to_gains):
                 warnings.simplefilter("error", category=RuntimeWarning)
                 freq_to_grade[stream,nonzero_indexes] = np.abs(sum_freq[stream,nonzero_indexes])/sum_abs_freq[stream,nonzero_indexes]
         except (ZeroDivisionError, RuntimeWarning):
-            freq_to_grade[stream,nonzero_indexes] = -1.0
+            freq_to_grade[stream,nonzero_indexes] = [-1.0]*nof_streams
 
     return freq_to_grade
 
