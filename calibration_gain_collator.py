@@ -69,6 +69,7 @@ class CalibrationGainCollector():
         self.scan_is_ending=False
         self.obs_is_starting = False
         self.scan_end=0
+        self.database_calibration_entity_id=None
 
         self.cosmicdb_engine_conf_yaml_filepath = cosmicdb_engine_conf_yaml_filepath
         self.cosmicdb_engine = CosmicDB_Engine(cosmicdb_engine_conf_yaml_filepath, scope=entities.DatabaseScope.Operation)
@@ -243,7 +244,25 @@ class CalibrationGainCollector():
                             the same directory in folder `calibration`.
                             """, severity = "INFO", is_reply = True)
                             self.obs_is_starting = True
+
+                        if self.database_calibration_entity_id is None:
                             continue
+
+                        with self.cosmicdb_engine.session() as session:
+                            db_obs_entity = self.cosmicdb_engine.select_entity(
+                                entities.CosmicDB_Observation,
+                                session,
+                                id = message_data["database_observation_entity_id"]
+                            )
+                            if db_obs_entity is None:
+                                self.log_and_post_slackmessage(f"""
+                                Calibration process could not select Observation entity for update with ID =
+                                `{message_data['database_observation_entity_id']}`
+                                """, severity="WARNING", is_reply=True)
+                            else:
+                                db_obs_entity.calibration_id = self.database_calibration_entity_id
+                                session.commit()
+                        continue
                             
                     if channel == SCAN_END_CHANNEL:
                         self.scan_end = message_data["stop_time_unix"]
@@ -903,9 +922,10 @@ class CalibrationGainCollector():
                             
                             session.add(db_obscal)
                             session.commit()
+                            session.refresh(db_obscal) #refresh so that index resets
+                            self.database_calibration_entity_id = db_obscal.id
 
                             if flagged_frequencies is not None: #only populate this table if flagged frequencies are present
-                                session.refresh(db_obscal) #refresh so that index resets
                                 tune_to_proc_frequencies = {
                                     0 : len(collected_frequencies[0]),
                                     1 : len(collected_frequencies[1])
