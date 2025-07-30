@@ -21,7 +21,7 @@ from cosmic.redis_actions import redis_obj, redis_hget_keyvalues, redis_publish_
 from plot_delay_phase import plot_delay_phase, plot_gain_phase, plot_gain_amplitude, plot_snr_and_phase_spread, plot_gain_grade, plot_ant_to_num_flagged_frequencies
 
 from cosmic_database import entities
-from cosmic_database.engine import CosmicDB_Engine
+from cosmic_database.engine import CosmicDB_Engine, cli_add_engine_arguments, get_storage_filesystem_latest_network_uri
 import sqlalchemy
 from datetime import datetime
 
@@ -40,9 +40,9 @@ OBSERVATIONS_CHANNEL = "observations"
 CHANNEL_ORDER=[OBSERVATIONS_CHANNEL, SCAN_END_CHANNEL, GPU_GAINS_REDIS_CHANNEL]
 
 class CalibrationGainCollector():
-    def __init__(self, redis_obj, fetch_config = False, user_output_dir='.', hash_timeout=20, re_arm_time = 30, fit_method = "fourier", dry_run = False,
+    def __init__(self, redis_obj, cosmicdb_engine_conf_yaml_filepath, fetch_config = False, user_output_dir='.', hash_timeout=20, re_arm_time = 30, fit_method = "fourier", dry_run = False,
                  archive_mode = False, nof_streams = 4, nof_tunings = 2, nof_pols = 2, nof_channels = 1024, slackbot=None, input_fixed_delays = None, input_fixed_phases = None,
-                input_json_dict = None, input_fcents = None, input_sideband = None, input_tbin = None, start_epoch_seconds=None, snr_threshold = 4.0, cosmicdb_engine_url:str = None):
+                input_json_dict = None, input_fcents = None, input_sideband = None, input_tbin = None, start_epoch_seconds=None, snr_threshold = 4.0):
         self.redis_obj = redis_obj
         self.user_output_dir = user_output_dir
         self.hash_timeout = hash_timeout
@@ -70,9 +70,8 @@ class CalibrationGainCollector():
         self.obs_is_starting = False
         self.scan_end=0
 
-        self.cosmicdb_engine = None
-        if cosmicdb_engine_url is not None:
-            self.cosmicdb_engine = CosmicDB_Engine(engine_url=cosmicdb_engine_url)
+        self.cosmicdb_engine_conf_yaml_filepath = cosmicdb_engine_conf_yaml_filepath
+        self.cosmicdb_engine = CosmicDB_Engine(cosmicdb_engine_conf_yaml_filepath, scope=entities.DatabaseScope.Operation)
 
         if fetch_config:
             #This will override the above properties IF the redis configuration hash is populated and exists
@@ -232,7 +231,11 @@ class CalibrationGainCollector():
                             self.meta_obs = redis_hget_keyvalues(self.redis_obj, "META")
                             self.obs_is_starting = True
                         if "MoveARG" in message_data['postprocess']:
-                            self.user_output_dir = (message_data['postprocess']["MoveARG"]).split('$',1)[0]
+                            postproc_move_argstr = message_data['postprocess']["MoveARG"]
+                            assert postproc_move_argstr == "--path-local-to-storage-database /$PROJID$/$DATASET$/$OBSID$/"
+                            self.user_output_dir = get_storage_filesystem_latest_network_uri(
+                                self.cosmicdb_engine_conf_yaml_filepath
+                            )
                             self.log_and_post_slackmessage(f"""
                             Upcoming observation is saving UVH5 files to:
                             `{self.user_output_dir}`
@@ -891,7 +894,7 @@ class CalibrationGainCollector():
                             else:
                                 assert db_obs, "Observation not found in observation database."
 
-                            db_obscal = entities.CosmicDB_ObservationCalibration(
+                            db_obscal = entities.CosmicDB_Calibration(
                                 observation_id=db_obs.id,
                                 reference_antenna_name=ref_ant,
                                 overall_grade=full_grade,
@@ -1070,6 +1073,7 @@ if __name__ == "__main__":
     description=("""Listen for updates to GPU hashes containing calibration phases
     and generate residual delays and load calibration phases to the F-Engines.""")
     )
+    cli_add_engine_arguments(parser)
     parser.add_argument("-s","--run-as-service", action="store_true",help="""If specified, all other arguments are ignored
     and the configuration set up is collected on each main loop from the configuration redis Hash. See 
     configure_calibration_process.py to set the hash contents for configuration.""")
@@ -1203,13 +1207,8 @@ if __name__ == "__main__":
             logger.log(getattr(logging, "ERROR"), f"Unable to create directory {output_dir}. Calibration run will continue without saving calibration solutions to disk.")
             pass
 
-    cosmicdb_engine_url = None
-    if args.cosmicdb_engine_configuration is not None:
-        cosmicdb_engine_url = CosmicDB_Engine._create_url(args.cosmicdb_engine_configuration)
-
-    calibrationGainCollector = CalibrationGainCollector(redis_obj, fetch_config = args.run_as_service, user_output_dir = output_dir, hash_timeout = args.hash_timeout, dry_run = args.dry_run,
+    calibrationGainCollector = CalibrationGainCollector(redis_obj, args.engine_configuration, fetch_config = args.run_as_service, user_output_dir = output_dir, hash_timeout = args.hash_timeout, dry_run = args.dry_run,
                                 archive_mode = args.archive_mode, re_arm_time = args.re_arm_time, fit_method = args.fit_method, slackbot = slackbot, input_fixed_delays = input_fixed_delays,
                                 input_fixed_phases = input_fixed_phases, input_json_dict = None if not bool(input_json_dict) else input_json_dict,
-                                input_fcents = args.fcentmhz, input_sideband = args.sideband, input_tbin = args.tbin, start_epoch_seconds = args.start_epoch_seconds, snr_threshold = args.snr_threshold,
-                                cosmicdb_engine_url = cosmicdb_engine_url)
+                                input_fcents = args.fcentmhz, input_sideband = args.sideband, input_tbin = args.tbin, start_epoch_seconds = args.start_epoch_seconds, snr_threshold = args.snr_threshold)
     calibrationGainCollector.start()
