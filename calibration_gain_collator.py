@@ -32,6 +32,7 @@ LOG_HASH = "CAL_log"
 
 GPU_PHASES_REDIS_HASH = "GPU_calibrationPhases"
 GPU_GAINS_REDIS_HASH = "GPU_calibrationGains"
+GPU_SUBBAND_GRADE_HASH = "GPU_calibrationSubbandGrades"
 
 GPU_GAINS_REDIS_CHANNEL = "gpu_calibrationgains"
 SCAN_END_CHANNEL = "scan_dataset_finish"
@@ -716,6 +717,11 @@ class CalibrationGainCollector():
 
                 ant_to_grade = calc_calibration_ant_grade(full_gains_map)
                 freq_to_grade = calc_calibration_freq_grade(full_gains_map)
+                tune_to_subbandgrade = calc_calibration_subband_grade(freq_to_grade)
+                tune_to_subbandgrade['time_unix'] = time.time()
+                tune_to_subbandgrade['dataset_id'] = self.dataset
+                if not self.dry_run:
+                    redis_publish_dict_to_hash(self.redis_obj, GPU_SUBBAND_GRADE_HASH, tune_to_subbandgrade)
                 full_grade = calc_full_grade(full_gains_map)
                 if not self.archive_mode:
                     try:

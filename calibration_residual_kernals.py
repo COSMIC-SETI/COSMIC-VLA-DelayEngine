@@ -31,7 +31,7 @@ def calc_calibration_ant_grade(ant_to_gains):
 def calc_calibration_freq_grade(ant_to_gains):
     """
     Accept mapping of antenna to gains.
-    Returns ant to calibration grade for frequency.
+    Returns ant to calibration grade for frequency. If the grade is "nan", then no gains were present for that frequency.
 
     Args:
         ant_to_gains : A dictionary mapping of antenna name to complex gain matrix of dimension (n_streams, n_chans).
@@ -53,14 +53,52 @@ def calc_calibration_freq_grade(ant_to_gains):
 
     for stream in range(freq_to_grade.shape[0]):
         nonzero_indexes = np.where(sum_abs_freq[stream,:] != 0)[0]
+        zero_indexes = np.where(sum_abs_freq[stream,:] == 0)[0]
         try:
             with warnings.catch_warnings():
                 warnings.simplefilter("error", category=RuntimeWarning)
                 freq_to_grade[stream,nonzero_indexes] = np.abs(sum_freq[stream,nonzero_indexes])/sum_abs_freq[stream,nonzero_indexes]
         except (ZeroDivisionError, RuntimeWarning):
             freq_to_grade[stream,nonzero_indexes] = [-1.0]*nof_streams
+        freq_to_grade[stream, zero_indexes] = np.nan
 
     return freq_to_grade
+
+def calc_calibration_subband_grade(freq_to_grade, subband_size=32):
+    """
+    Calculate average grade per subband (32 channels) for each tuning,
+    summing/averaging across polarisations.
+
+    Args:
+        freq_to_grade: np.ndarray of shape (n_streams, n_channels)
+        subband_size: int, number of channels per subband (default 32)
+
+    Returns:
+        dict {tuning_idx: [subband_grade, ...]} (len=32 per tuning)
+    """
+    n_streams, n_channels = freq_to_grade.shape
+    n_tunings = n_streams // 2
+    n_subbands = n_channels // subband_size
+
+    tune_to_subbandgrade = {}
+
+    TUNING_STR = ["AC", "BD"]
+
+    for tuning in range(n_tunings):
+        # Average across polarisations for this tuning
+        pol0 = freq_to_grade[tuning*2]
+        pol1 = freq_to_grade[tuning*2+1]
+        avg_pol = np.nanmean(np.stack([pol0, pol1]), axis=0)  # shape: (n_channels,)
+
+        subband_grades = np.empty(n_subbands, dtype=float)
+        for subband in range(n_subbands):
+            start = subband * subband_size
+            end = start + subband_size
+            subband_nanmean = np.nanmean(avg_pol[start:end])
+            subband_grades[subband] = 0.0 if np.isnan(subband_nanmean) else subband_nanmean
+        tune_to_subbandgrade[TUNING_STR[tuning]] = subband_grades.tolist()
+
+    return tune_to_subbandgrade
 
 def calc_full_grade(ant_to_gains):
     """
