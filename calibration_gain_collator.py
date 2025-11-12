@@ -894,7 +894,7 @@ class CalibrationGainCollector():
                                     """, severity="INFO", is_reply=True
                                 )
                                 db_obs = self.cosmicdb_engine.select_entity(
-                                    session, entities.CosmicDB_Observation, **select_criteria
+                                    entities.CosmicDB_Observation, session, **select_criteria
                                 )
                             else:
                                 #Query just on scan_id and then sort against start time and pick the closest
