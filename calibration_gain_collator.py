@@ -102,10 +102,10 @@ class CalibrationGainCollector():
             `{fixed_value_filepaths["fixed_phase"]}`
             to F-Engines.""", severity="INFO")
             #fixed delays:
-            load_delay_calibrations(fixed_value_filepaths["fixed_delay"])
+            load_delay_calibrations(fixed_value_filepaths["fixed_delay"], fallback_csv=self.input_fixed_delays)
             #fixed phases
-            load_phase_calibrations(fixed_value_filepaths["fixed_phase"])
-    
+            load_phase_calibrations(fixed_value_filepaths["fixed_phase"], fallback_json=self.input_fixed_phases)
+
     def configure_from_hash(self):
         """This function will gather from the redis configuration hash, the required configuration in which
         to run the calibration process."""
@@ -199,8 +199,8 @@ class CalibrationGainCollector():
                     `{self.input_fixed_phases}`
                     respectively.""", severity="INFO", is_reply = True)
                     self.configure_from_hash()
-                    load_delay_calibrations(self.input_fixed_delays)
-                    load_phase_calibrations(self.input_fixed_phases)
+                    load_delay_calibrations(self.input_fixed_delays, fallback_csv=self.input_fixed_delays)
+                    load_phase_calibrations(self.input_fixed_phases, fallback_json=self.input_fixed_phases)
                     self.scan_is_ending=False
 
                 message = pubsub.get_message()
@@ -849,7 +849,7 @@ class CalibrationGainCollector():
                         #Publish new fixed delays to FEngines:
                         if not self.dry_run:
                             self.log_and_post_slackmessage("""Updating fixed-delays on *all* antenna now...""", severity = "INFO", is_reply=True)
-                            load_delay_calibrations(modified_fixed_delays_path)
+                            load_delay_calibrations(modified_fixed_delays_path, fallback_csv=self.input_fixed_delays)
                     except:
                         self.log_and_post_slackmessage(f"Unable to save fixed delays to file `{modified_fixed_delays_path}`.\nAborting run.",severity="ERROR", is_reply = False, update_message = True)
                         exit(0)
@@ -875,7 +875,7 @@ class CalibrationGainCollector():
                         # Update the fixed phases on the F-Engines and update the fixed_phase path
                         if not self.dry_run:
                             self.log_and_post_slackmessage("""Updating fixed-phases on *all* antenna now...""", severity = "INFO", is_reply=True)
-                            load_phase_calibrations(modified_fixed_phases_path)
+                            load_phase_calibrations(modified_fixed_phases_path, fallback_json=self.input_fixed_phases)
                     except:
                         self.log_and_post_slackmessage(f"Unable to save fixed phases to file `{modified_fixed_phases_path}`.\nAborting run.",severity="ERROR", is_reply = False, update_message = True)
                         exit(0)

@@ -6,12 +6,16 @@ from delaycalibration import CALIBRATION_CACHE_HASH
 from cosmic.fengines import ant_remotefeng_map
 from cosmic.redis_actions import redis_obj, redis_publish_dict_to_hash, redis_publish_dict_to_channel
 
-def load_phase_calibrations(json_file, check_phases = False):
+def load_phase_calibrations(json_file, fallback_json=None, check_phases=False):
     with open(json_file, 'r') as f:
         ant_phase_cal_map = json.load(f)
         redis_publish_dict_to_hash(redis_obj, "META_calibrationPhases",ant_phase_cal_map)
         redis_publish_dict_to_channel(redis_obj, "update_calibration_phases", True)
         redis_publish_dict_to_hash(redis_obj, CALIBRATION_CACHE_HASH, {"fixed_phase":json_file})
+
+    if fallback_json is not None:
+        using_default = json_file == fallback_json
+        redis_publish_dict_to_hash(redis_obj, CALIBRATION_CACHE_HASH, {"using_default_phases": using_default, "time_unix": time.time()})
     
     if check_phases:
         ant_feng_map = ant_remotefeng_map.get_antennaFengineDict(redis_obj)

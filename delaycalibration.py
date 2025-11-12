@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 import argparse
 import astropy.constants as const
+import time
 import os
 from cosmic.redis_actions import redis_obj, redis_publish_dict_to_hash, redis_publish_dict_to_channel
 
@@ -9,7 +10,7 @@ from cosmic.redis_actions import redis_obj, redis_publish_dict_to_hash, redis_pu
 ADVANCE_TIME = (8e3/(0.66*const.c.value)) #largest baseline 8km / (2/3rds c) ~ largest calibration delay in s
 CALIBRATION_CACHE_HASH = "CAL_fixedValuePaths"
 
-def load_delay_calibrations(calib_csv):
+def load_delay_calibrations(calib_csv, fallback_csv=None):
     #read in calibration delay data dictionary
     ant2calibmap_init = pd.read_csv(os.path.abspath(calib_csv), names = ["IF0","IF1","IF2","IF3"], header=None, skiprows=1).to_dict('index')
     ant2calibmap = {}
@@ -24,6 +25,10 @@ def load_delay_calibrations(calib_csv):
     redis_publish_dict_to_hash(redis_obj, "META_calibrationDelays", ant2calibmap)
     redis_publish_dict_to_channel(redis_obj, "update_calibration_delays", True)
     redis_publish_dict_to_hash(redis_obj, CALIBRATION_CACHE_HASH, {"fixed_delay":calib_csv})
+
+    if fallback_csv is not None:
+        using_default = calib_csv == fallback_csv
+        redis_publish_dict_to_hash(redis_obj, CALIBRATION_CACHE_HASH, {"using_default_delays": using_default, "time_unix": time.time()})
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
