@@ -15,7 +15,7 @@ from delaycalibration import load_delay_calibrations, CALIBRATION_CACHE_HASH
 from phasecalibration import load_phase_calibrations
 from textwrap import dedent
 import pprint
-from calibration_residual_kernals import calc_residuals_from_polyfit, calc_residuals_from_ifft, calc_calibration_ant_grade, calc_calibration_freq_grade, calc_full_grade
+from calibration_residual_kernals import calc_residuals_from_polyfit, calc_residuals_from_ifft, calc_calibration_ant_grade, calc_calibration_freq_grade, calc_full_grade, calc_calibration_subband_grade
 from cosmic.observations.slackbot import SlackBot
 from cosmic.redis_actions import redis_obj, redis_hget_keyvalues, redis_publish_dict_to_hash, redis_clear_hash_contents, redis_publish_service_pulse, redis_publish_dict_to_channel
 from plot_delay_phase import plot_delay_phase, plot_gain_phase, plot_gain_amplitude, plot_snr_and_phase_spread, plot_gain_grade, plot_ant_to_num_flagged_frequencies
