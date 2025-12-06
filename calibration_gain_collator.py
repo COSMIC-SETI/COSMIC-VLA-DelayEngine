@@ -15,7 +15,7 @@ from delaycalibration import load_delay_calibrations, CALIBRATION_CACHE_HASH
 from phasecalibration import load_phase_calibrations
 from textwrap import dedent
 import pprint
-from calibration_residual_kernals import calc_residuals_from_polyfit, calc_residuals_from_ifft, calc_calibration_ant_grade, calc_calibration_freq_grade, calc_full_grade, calc_calibration_subband_grade
+from calibration_residual_kernals import calc_residuals_from_polyfit, calc_residuals_from_ifft, calc_calibration_ant_grade, calc_calibration_freq_grade, calc_full_grade, calc_calibration_subband_grade, zero_calibration_subband_grade
 from cosmic.observations.slackbot import SlackBot
 from cosmic.redis_actions import redis_obj, redis_hget_keyvalues, redis_publish_dict_to_hash, redis_clear_hash_contents, redis_publish_service_pulse, redis_publish_dict_to_channel
 from plot_delay_phase import plot_delay_phase, plot_gain_phase, plot_gain_amplitude, plot_snr_and_phase_spread, plot_gain_grade, plot_ant_to_num_flagged_frequencies
@@ -202,6 +202,12 @@ class CalibrationGainCollector():
                     self.configure_from_hash()
                     load_delay_calibrations(self.input_fixed_delays, fallback_csv=self.input_fixed_delays)
                     load_phase_calibrations(self.input_fixed_phases, fallback_json=self.input_fixed_phases)
+                    # set grades to zero:
+                    tune_to_subbandgrade = zero_calibration_subband_grade(freq_to_grade)
+                    tune_to_subbandgrade['time_unix'] = time.time()
+                    tune_to_subbandgrade['dataset_id'] = self.dataset
+                    if not self.dry_run:
+                        redis_publish_dict_to_hash(self.redis_obj, GPU_SUBBAND_GRADE_HASH, tune_to_subbandgrade)
                     self.scan_is_ending=False
 
                 message = pubsub.get_message()

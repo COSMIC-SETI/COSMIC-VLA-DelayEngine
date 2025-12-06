@@ -64,6 +64,32 @@ def calc_calibration_freq_grade(ant_to_gains):
 
     return freq_to_grade
 
+def zero_calibration_subband_grade(freq_to_grade, subband_size=32):
+    """
+    Zero every grade per subband (32 channels) for each tuning,
+    summing/averaging across polarisations.
+
+    Args:
+        freq_to_grade: np.ndarray of shape (n_streams, n_channels)
+        subband_size: int, number of channels per subband (default 32)
+    Returns:
+        dict {tuning_idx: [0.0, ...]} (len=32 per tuning)
+    """
+    n_streams, n_channels = freq_to_grade.shape
+    n_tunings = n_streams // 2
+    n_subbands = n_channels // subband_size
+
+    tune_to_subbandgrade = {}
+    tune_to_subbandgrade["subband_boundaries"] = [i * subband_size for i in range(n_subbands + 1)]
+
+    TUNING_STR = ["AC", "BD"]
+
+    for tuning in range(n_tunings):
+        subband_grades = [0]*n_subbands
+        tune_to_subbandgrade[TUNING_STR[tuning]] = subband_grades
+
+    return tune_to_subbandgrade
+
 def calc_calibration_subband_grade(freq_to_grade, subband_size=32):
     """
     Calculate average grade per subband (32 channels) for each tuning,
@@ -81,6 +107,7 @@ def calc_calibration_subband_grade(freq_to_grade, subband_size=32):
     n_subbands = n_channels // subband_size
 
     tune_to_subbandgrade = {}
+    tune_to_subbandgrade["subband_boundaries"] = [i * subband_size for i in range(n_subbands + 1)]
 
     TUNING_STR = ["AC", "BD"]
 
