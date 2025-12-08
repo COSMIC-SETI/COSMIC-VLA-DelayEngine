@@ -203,7 +203,7 @@ class CalibrationGainCollector():
                     load_delay_calibrations(self.input_fixed_delays, fallback_csv=self.input_fixed_delays)
                     load_phase_calibrations(self.input_fixed_phases, fallback_json=self.input_fixed_phases)
                     # set grades to zero:
-                    tune_to_subbandgrade = zero_calibration_subband_grade(freq_to_grade)
+                    tune_to_subbandgrade = zero_calibration_subband_grade(self.nof_streams, self.nof_channels)
                     tune_to_subbandgrade['time_unix'] = time.time()
                     tune_to_subbandgrade['dataset_id'] = self.dataset
                     if not self.dry_run:

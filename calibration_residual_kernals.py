@@ -64,18 +64,18 @@ def calc_calibration_freq_grade(ant_to_gains):
 
     return freq_to_grade
 
-def zero_calibration_subband_grade(freq_to_grade, subband_size=32):
+def zero_calibration_subband_grade(n_streams=4, n_channels=1024, subband_size=32):
     """
     Zero every grade per subband (32 channels) for each tuning,
     summing/averaging across polarisations.
 
     Args:
-        freq_to_grade: np.ndarray of shape (n_streams, n_channels)
+        n_streams: int (default 4)
+        n_channels: int (default 1024)
         subband_size: int, number of channels per subband (default 32)
     Returns:
         dict {tuning_idx: [0.0, ...]} (len=32 per tuning)
     """
-    n_streams, n_channels = freq_to_grade.shape
     n_tunings = n_streams // 2
     n_subbands = n_channels // subband_size
 
