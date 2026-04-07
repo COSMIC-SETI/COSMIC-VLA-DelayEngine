@@ -21,7 +21,7 @@ from cosmic.redis_actions import redis_obj, redis_hget_keyvalues, redis_publish_
 from plot_delay_phase import plot_delay_phase, plot_gain_phase, plot_gain_amplitude, plot_snr_and_phase_spread, plot_gain_grade, plot_ant_to_num_flagged_frequencies
 
 from cosmic_database import entities
-from cosmic_database.engine import CosmicDB_Engine, cli_add_engine_arguments, get_storage_filesystem_latest_network_uri
+from cosmic_database.engine import CosmicDB_EngineMultiConfig, cli_add_engine_arguments, get_storage_filesystem_latest_network_uri
 import sqlalchemy
 from datetime import datetime
 
@@ -73,7 +73,8 @@ class CalibrationGainCollector():
         self.database_calibration_entity_id=None
 
         self.cosmicdb_engine_conf_yaml_filepath = cosmicdb_engine_conf_yaml_filepath
-        self.cosmicdb_engine = CosmicDB_Engine(cosmicdb_engine_conf_yaml_filepath, scope=entities.DatabaseScope.Operation)
+        cosmicdb_multiconf = CosmicDB_EngineMultiConfig(self.cosmicdb_engine_conf_yaml_filepath)
+        self.cosmicdb_engine = cosmicdb_multiconf.get_active_storage_dbengine()
 
         if fetch_config:
             #This will override the above properties IF the redis configuration hash is populated and exists
